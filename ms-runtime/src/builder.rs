@@ -226,7 +226,7 @@ mod tests {
 
         builder.fn_start("test");
         builder.none();
-        builder.end_function();
+        builder.end();
 
         let bytecode = builder.get_bytecode();
 
