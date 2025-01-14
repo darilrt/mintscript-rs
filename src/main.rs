@@ -20,13 +20,17 @@ fn modules_std() -> Module {
 fn main() {
     let mut builder = ModuleBuilder::new();
 
-    builder.def("main");
+    builder.function("main");
+
+    builder.add(ByteCode::Loop);
+    builder.add_u32(30);
+
     builder.push_const_string("Hello, World!");
-    builder.dup();
-    builder.push_arg();
     builder.push_arg();
     builder.call("std", "print");
-    builder.end();
+    builder.pop();
+
+    builder.end_function();
 
     let code = builder.get_bytecode();
 
@@ -37,5 +41,5 @@ fn main() {
     vm.load_module("main", module);
     vm.load_module("std", modules_std());
 
-    vm.call("main", "main", vec![Value::Integer(42)]);
+    vm.call("main", "main", vec![Value::Integer(5)]);
 }

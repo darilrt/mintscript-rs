@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::module_reader::ByteReader;
+use crate::byte_reader::ByteReader;
 use crate::{version::*, ByteCode, Function, Value};
 
 pub struct Module {
@@ -44,7 +44,6 @@ impl Module {
 
             match bytecode.unwrap() {
                 ByteCode::Func => {
-                    // FUNC <length: u32> <name: string> <code: [ByteCode x length]>
                     // Read the length of the function name
                     let length = reader.read_u32();
 

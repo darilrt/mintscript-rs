@@ -22,6 +22,28 @@ pub enum ByteCode {
     // Stack manipulation
     Pop = 0x0B, // Pop the top element of the stack
     Dup = 0x0C, // Duplicate the top element of the stack
+
+    // Arithmetic
+    Add = 0x0D, // Add
+    Sub = 0x0E, // Subtract
+    Mul = 0x0F, // Multiply
+    Div = 0x10, // Divide
+
+    // Comparison
+    Eq = 0x11, // Equal
+    Ne = 0x12, // Not equal
+    Lt = 0x13, // Less than
+    Le = 0x14, // Less than or equal
+    Gt = 0x15, // Greater than
+    Ge = 0x16, // Greater than or equal
+
+    // Control flow
+    Ret = 0xFE,      // Return from the current function
+    If = 0xFD,       // IF <block: [ByteCode]> END Execute a block of code conditionally
+    Else = 0xFC, // IF <block: [ByteCode]> ELSE <block: [ByteCode]> END Execute a block of code conditionally
+    Loop = 0xFB, // LOOP <block: [ByteCode]> END Execute a block of code in a loop until instructed to break
+    Break = 0xFA, // BREAK Exit the current loop
+    Continue = 0xF9, // CONTINUE Skip to the next iteration of the current loop
 }
 
 impl ByteCode {
@@ -39,6 +61,21 @@ impl ByteCode {
             0x0A => Some(ByteCode::PopArg),
             0x0B => Some(ByteCode::Pop),
             0x0C => Some(ByteCode::Dup),
+            0x0D => Some(ByteCode::Add),
+            0x0E => Some(ByteCode::Sub),
+            0x0F => Some(ByteCode::Mul),
+            0x10 => Some(ByteCode::Div),
+            0x11 => Some(ByteCode::Eq),
+            0x12 => Some(ByteCode::Ne),
+            0x13 => Some(ByteCode::Lt),
+            0x14 => Some(ByteCode::Le),
+            0x15 => Some(ByteCode::Gt),
+            0x16 => Some(ByteCode::Ge),
+            0xFE => Some(ByteCode::Ret),
+            0xFD => Some(ByteCode::If),
+            0xFC => Some(ByteCode::Else),
+            0xFB => Some(ByteCode::Loop),
+            0xFA => Some(ByteCode::Break),
             _ => None,
         }
     }

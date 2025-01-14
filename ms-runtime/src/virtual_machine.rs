@@ -1,12 +1,15 @@
 use core::panic;
 use std::collections::HashMap;
 
-use crate::{module::Module, module_reader::ByteReader, ByteCode, Value};
+use crate::{byte_reader::ByteReader, module::Module, ByteCode, Value};
 
 pub struct VirtualMachine {
     stack: Vec<Value>,
     arg_stack: Vec<Value>,
     modules: HashMap<String, Module>,
+    call_break: bool,
+    call_continue: bool,
+    call_return: bool,
 }
 
 impl VirtualMachine {
@@ -15,6 +18,9 @@ impl VirtualMachine {
             stack: Vec::new(),
             arg_stack: Vec::new(),
             modules: HashMap::new(),
+            call_break: false,
+            call_continue: false,
+            call_return: false,
         }
     }
 
@@ -22,8 +28,12 @@ impl VirtualMachine {
         self.modules.insert(name.to_string(), module);
     }
 
-    pub fn execute(&mut self, code: Vec<u8>) -> Value {
+    pub fn execute(&mut self, code: &Vec<u8>) -> Value {
         let mut reader = ByteReader::new(&code);
+
+        self.call_break = false;
+        self.call_continue = false;
+        self.call_return = false;
 
         while let Some(byte) = reader.read_byte() {
             let bytecode = ByteCode::from_u8(byte);
@@ -88,6 +98,221 @@ impl VirtualMachine {
 
                     self.stack.push(value);
                 }
+                ByteCode::Add => {
+                    let a = self.stack.pop().unwrap();
+                    let b = self.stack.pop().unwrap();
+
+                    match (a, b) {
+                        (Value::Integer(a), Value::Integer(b)) => {
+                            self.stack.push(Value::Integer(a + b));
+                        }
+                        (Value::Float(a), Value::Float(b)) => {
+                            self.stack.push(Value::Float(a + b));
+                        }
+                        _ => {
+                            panic!("Invalid types");
+                        }
+                    }
+                }
+                ByteCode::Sub => {
+                    let a = self.stack.pop().unwrap();
+                    let b = self.stack.pop().unwrap();
+
+                    match (a, b) {
+                        (Value::Integer(a), Value::Integer(b)) => {
+                            self.stack.push(Value::Integer(a - b));
+                        }
+                        (Value::Float(a), Value::Float(b)) => {
+                            self.stack.push(Value::Float(a - b));
+                        }
+                        _ => {
+                            panic!("Invalid types");
+                        }
+                    }
+                }
+                ByteCode::Mul => {
+                    let a = self.stack.pop().unwrap();
+                    let b = self.stack.pop().unwrap();
+
+                    match (a, b) {
+                        (Value::Integer(a), Value::Integer(b)) => {
+                            self.stack.push(Value::Integer(a * b));
+                        }
+                        (Value::Float(a), Value::Float(b)) => {
+                            self.stack.push(Value::Float(a * b));
+                        }
+                        _ => {
+                            panic!("Invalid types");
+                        }
+                    }
+                }
+                ByteCode::Div => {
+                    let a = self.stack.pop().unwrap();
+                    let b = self.stack.pop().unwrap();
+
+                    match (a, b) {
+                        (Value::Integer(a), Value::Integer(b)) => {
+                            self.stack.push(Value::Integer(a / b));
+                        }
+                        (Value::Float(a), Value::Float(b)) => {
+                            self.stack.push(Value::Float(a / b));
+                        }
+                        _ => {
+                            panic!("Invalid types");
+                        }
+                    }
+                }
+                ByteCode::Eq => {
+                    let a = self.stack.pop().unwrap();
+                    let b = self.stack.pop().unwrap();
+
+                    match (a, b) {
+                        (Value::Integer(a), Value::Integer(b)) => {
+                            self.stack.push(Value::Integer(if a == b { 1 } else { 0 }));
+                        }
+                        (Value::Float(a), Value::Float(b)) => {
+                            self.stack.push(Value::Integer(if a == b { 1 } else { 0 }));
+                        }
+                        _ => {
+                            panic!("Invalid types");
+                        }
+                    }
+                }
+                ByteCode::Ne => {
+                    let a = self.stack.pop().unwrap();
+                    let b = self.stack.pop().unwrap();
+
+                    match (a, b) {
+                        (Value::Integer(a), Value::Integer(b)) => {
+                            self.stack.push(Value::Integer(if a != b { 1 } else { 0 }));
+                        }
+                        (Value::Float(a), Value::Float(b)) => {
+                            self.stack.push(Value::Integer(if a != b { 1 } else { 0 }));
+                        }
+                        _ => {
+                            panic!("Invalid types");
+                        }
+                    }
+                }
+                ByteCode::Lt => {
+                    let a = self.stack.pop().unwrap();
+                    let b = self.stack.pop().unwrap();
+
+                    match (a, b) {
+                        (Value::Integer(a), Value::Integer(b)) => {
+                            self.stack.push(Value::Integer(if a < b { 1 } else { 0 }));
+                        }
+                        (Value::Float(a), Value::Float(b)) => {
+                            self.stack.push(Value::Integer(if a < b { 1 } else { 0 }));
+                        }
+                        _ => {
+                            panic!("Invalid types");
+                        }
+                    }
+                }
+                ByteCode::Le => {
+                    let a = self.stack.pop().unwrap();
+                    let b = self.stack.pop().unwrap();
+
+                    match (a, b) {
+                        (Value::Integer(a), Value::Integer(b)) => {
+                            self.stack.push(Value::Integer(if a <= b { 1 } else { 0 }));
+                        }
+                        (Value::Float(a), Value::Float(b)) => {
+                            self.stack.push(Value::Integer(if a <= b { 1 } else { 0 }));
+                        }
+                        _ => {
+                            panic!("Invalid types");
+                        }
+                    }
+                }
+                ByteCode::Gt => {
+                    let a = self.stack.pop().unwrap();
+                    let b = self.stack.pop().unwrap();
+
+                    match (a, b) {
+                        (Value::Integer(a), Value::Integer(b)) => {
+                            self.stack.push(Value::Integer(if a > b { 1 } else { 0 }));
+                        }
+                        (Value::Float(a), Value::Float(b)) => {
+                            self.stack.push(Value::Integer(if a > b { 1 } else { 0 }));
+                        }
+                        _ => {
+                            panic!("Invalid types");
+                        }
+                    }
+                }
+                ByteCode::Ge => {
+                    let a = self.stack.pop().unwrap();
+                    let b = self.stack.pop().unwrap();
+
+                    match (a, b) {
+                        (Value::Integer(a), Value::Integer(b)) => {
+                            self.stack.push(Value::Integer(if a >= b { 1 } else { 0 }));
+                        }
+                        (Value::Float(a), Value::Float(b)) => {
+                            self.stack.push(Value::Integer(if a >= b { 1 } else { 0 }));
+                        }
+                        _ => {
+                            panic!("Invalid types");
+                        }
+                    }
+                }
+                ByteCode::Ret => {
+                    self.call_return = true;
+                    return self.stack.pop().unwrap();
+                }
+                ByteCode::If => {
+                    let length = reader.read_u32().unwrap() as usize; // Read the length of the block
+                    let block = reader.read_bytes(length).unwrap(); // Read the block
+
+                    let condition = self.stack.pop().unwrap();
+
+                    if let Value::Integer(1) = condition {
+                        self.execute(&block);
+                    } else {
+                        reader.jump(length);
+                    }
+                }
+                ByteCode::Else => {
+                    let length = reader.read_u32().unwrap() as usize; // Read the length of the block
+                    let block = reader.read_bytes(length).unwrap(); // Read the block
+
+                    if let Value::Integer(0) = self.stack.pop().unwrap() {
+                        self.execute(&block);
+                    } else {
+                        reader.jump(length);
+                    }
+                }
+                ByteCode::Break => {
+                    return Value::Null;
+                }
+                ByteCode::Continue => {
+                    return Value::Null;
+                }
+                ByteCode::Loop => {
+                    let length = reader.read_u32().unwrap() as usize; // Read the length of the block
+                    let block = reader.read_bytes(length).unwrap(); // Read the block
+
+                    loop {
+                        let result = self.execute(&block);
+
+                        if self.call_return {
+                            self.call_return = false;
+                            return result;
+                        }
+
+                        if self.call_continue {
+                            self.call_continue = false;
+                            continue;
+                        }
+
+                        if self.call_break {
+                            self.call_break = false;
+                            break;
+                        }
+                    }
+                }
             }
         }
 
@@ -100,7 +325,8 @@ impl VirtualMachine {
         if let Some(function) = module.get_function(name) {
             match function {
                 crate::Function::ByteCode { name: _, code } => {
-                    return self.execute(code.clone());
+                    let code = code.clone();
+                    return self.execute(&code);
                 }
                 crate::Function::Native { name: _, function } => {
                     return function(args);

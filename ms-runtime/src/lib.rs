@@ -1,8 +1,9 @@
 mod builder;
+mod byte_reader;
+mod byte_writer;
 mod bytecode;
 mod function;
 mod module;
-mod module_reader;
 mod value;
 pub mod version;
 mod virtual_machine;
