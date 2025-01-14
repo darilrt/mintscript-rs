@@ -2,56 +2,136 @@ use std::collections::HashMap;
 
 use crate::{
     byte_writer::ByteWriter,
-    bytecode,
     version::{VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH},
     ByteCode, Function,
 };
 
+pub enum Block {
+    Loop(Vec<u8>),
+    If(Vec<u8>),
+    Else(Vec<u8>),
+    Function(String, Vec<u8>),
+}
+
 pub struct ModuleBuilder {
     pub functions: HashMap<String, Function>, // Functions in the module
-    current_function: String,                 // Name of the current function
-    current_bytecode: Vec<u8>,                // Bytecode of the current function
-    loop_stack: Vec<Vec<u8>>, // Stack of loops (used to store the bytecode of the loop)
+    nested_blocks: Vec<Block>,                // Stack of nested blocks
 }
 
 impl ModuleBuilder {
     pub fn new() -> ModuleBuilder {
         ModuleBuilder {
             functions: HashMap::new(),
-            current_function: String::new(),
-            current_bytecode: Vec::new(),
-            loop_stack: Vec::new(),
+            nested_blocks: Vec::new(),
         }
     }
 
-    pub fn function(&mut self, name: &str) {
-        self.current_function = name.to_string();
-        self.current_bytecode = Vec::new();
+    pub fn fn_start(&mut self, name: &str) {
+        self.nested_blocks
+            .push(Block::Function(name.to_string(), Vec::new()));
+    }
+
+    pub fn loop_start(&mut self) {
+        if self.nested_blocks.is_empty() {
+            panic!("No block to add bytecode to");
+        }
+        self.nested_blocks.push(Block::Loop(Vec::new()));
+    }
+
+    pub fn if_start(&mut self) {
+        if self.nested_blocks.is_empty() {
+            panic!("No block to add bytecode to");
+        }
+        self.nested_blocks.push(Block::If(Vec::new()));
+    }
+
+    pub fn else_start(&mut self) {
+        if self.nested_blocks.is_empty() {
+            panic!("No block to add bytecode to");
+        }
+        self.nested_blocks.push(Block::Else(Vec::new()));
+    }
+
+    pub fn end(&mut self) {
+        let block = self.nested_blocks.pop().unwrap();
+
+        match block {
+            Block::Function(name, bytecode) => {
+                self.functions.insert(
+                    name.clone(),
+                    Function::ByteCode {
+                        name,
+                        code: bytecode,
+                    },
+                );
+            }
+            Block::Loop(bytecode) => {
+                self.add(ByteCode::Loop);
+                self.add_u32(bytecode.len() as u32);
+
+                let mut writer = ByteWriter::new(self.get_current_bytecode());
+                writer.write_bytes(&bytecode);
+            }
+            Block::If(bytecode) => {
+                self.add(ByteCode::If);
+                self.add_u32(bytecode.len() as u32);
+
+                let mut writer = ByteWriter::new(self.get_current_bytecode());
+                writer.write_bytes(&bytecode);
+            }
+            Block::Else(bytecode) => {
+                self.add(ByteCode::Else);
+                self.add_u32(bytecode.len() as u32);
+
+                let mut writer = ByteWriter::new(self.get_current_bytecode());
+                writer.write_bytes(&bytecode);
+            }
+        }
+    }
+
+    #[inline]
+    pub fn get_current_block(&mut self) -> &mut Block {
+        match self.nested_blocks.last_mut() {
+            Some(block) => block,
+            None => {
+                panic!("No block to add bytecode to");
+            }
+        }
+    }
+
+    #[inline]
+    pub fn get_current_bytecode(&mut self) -> &mut Vec<u8> {
+        match self.get_current_block() {
+            Block::Function(_, bytecode) => bytecode,
+            Block::Loop(bytecode) => bytecode,
+            Block::If(bytecode) => bytecode,
+            Block::Else(bytecode) => bytecode,
+        }
     }
 
     #[inline]
     pub fn add(&mut self, bytecode: ByteCode) {
-        ByteWriter::new(&mut self.current_bytecode).write_byte(bytecode as u8);
+        ByteWriter::new(self.get_current_bytecode()).write_byte(bytecode as u8);
     }
 
     #[inline]
     pub fn add_u32(&mut self, value: u32) {
-        ByteWriter::new(&mut self.current_bytecode).write_u32(value);
+        ByteWriter::new(self.get_current_bytecode()).write_u32(value);
     }
 
     #[inline]
     pub fn add_i32(&mut self, value: i32) {
-        ByteWriter::new(&mut self.current_bytecode).write_i32(value);
+        ByteWriter::new(self.get_current_bytecode()).write_i32(value);
     }
 
     #[inline]
     pub fn add_f32(&mut self, value: f32) {
-        ByteWriter::new(&mut self.current_bytecode).write_f32(value);
+        ByteWriter::new(self.get_current_bytecode()).write_f32(value);
     }
 
     #[inline]
     pub fn add_string(&mut self, value: &str) {
-        ByteWriter::new(&mut self.current_bytecode).write_string(value);
+        ByteWriter::new(self.get_current_bytecode()).write_string(value);
     }
 
     // Call
@@ -103,48 +183,6 @@ impl ModuleBuilder {
         self.add(ByteCode::None);
     }
 
-    pub fn end_function(&mut self) {
-        self.functions.insert(
-            self.current_function.clone(),
-            Function::ByteCode {
-                name: self.current_function.clone(),
-                code: self.current_bytecode.clone(),
-            },
-        );
-    }
-
-    pub fn loop_start(&mut self) {
-        self.loop_stack.push(Vec::new());
-    }
-
-    // Copy the loop bytecode to the top loop on the stack
-    // if there is no loop on the stack then add the bytecode to the current function
-    pub fn end_loop(&mut self) {
-        let loop_bytecode = self.loop_stack.pop();
-
-        if let Some(loop_bytecode) = loop_bytecode {
-            let mut bytecode: Vec<u8> = Vec::new();
-            let mut writer = ByteWriter::new(&mut bytecode);
-
-            // Loop header
-            writer.write_byte(ByteCode::Loop as u8);
-            writer.write_u32(loop_bytecode.len() as u32);
-
-            // Loop bytecode
-            writer.write_bytes(&loop_bytecode);
-
-            // Check if there is a loop on the stack
-            if let Some(mut loop_stack) = self.loop_stack.pop() {
-                loop_stack.extend(bytecode);
-                self.loop_stack.push(loop_stack);
-            } else {
-                self.current_bytecode.extend(bytecode);
-            }
-        } else {
-            panic!("No loop to end");
-        }
-    }
-
     pub fn get_bytecode(&self) -> Vec<u8> {
         let mut bytecode = Vec::new();
         let mut writer = ByteWriter::new(&mut bytecode);
@@ -186,7 +224,7 @@ mod tests {
     fn test_module_builder_function() {
         let mut builder = ModuleBuilder::new();
 
-        builder.function("test");
+        builder.fn_start("test");
         builder.none();
         builder.end_function();
 

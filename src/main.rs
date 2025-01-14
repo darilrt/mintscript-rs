@@ -20,17 +20,18 @@ fn modules_std() -> Module {
 fn main() {
     let mut builder = ModuleBuilder::new();
 
-    builder.function("main");
+    builder.fn_start("main");
 
-    builder.add(ByteCode::Loop);
-    builder.add_u32(30);
+    builder.loop_start();
 
     builder.push_const_string("Hello, World!");
     builder.push_arg();
     builder.call("std", "print");
     builder.pop();
 
-    builder.end_function();
+    builder.end();
+
+    builder.end();
 
     let code = builder.get_bytecode();
 
