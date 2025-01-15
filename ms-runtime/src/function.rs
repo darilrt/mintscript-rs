@@ -1,9 +1,9 @@
-use crate::Value;
+use crate::{instruction::Code, Value};
 
 pub enum Function {
-    ByteCode {
+    Code {
         name: String,
-        code: Vec<u8>,
+        code: Code,
     },
     Native {
         name: String,

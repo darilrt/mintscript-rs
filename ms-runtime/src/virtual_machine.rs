@@ -1,23 +1,27 @@
 use core::panic;
 use std::collections::HashMap;
 
-use crate::{byte_reader::ByteReader, module::Module, ByteCode, Value};
+use crate::{
+    instruction::{Code, Instruction},
+    module::Module,
+    Value,
+};
 
 pub struct VirtualMachine {
     stack: Vec<Value>,
-    arg_stack: Vec<Value>,
     modules: HashMap<String, Module>,
+    local_vars: Vec<Vec<Value>>,
     call_break: bool,
     call_continue: bool,
     call_return: bool,
 }
 
-impl VirtualMachine {
+impl<'a> VirtualMachine {
     pub fn new() -> VirtualMachine {
         VirtualMachine {
             stack: Vec::new(),
-            arg_stack: Vec::new(),
             modules: HashMap::new(),
+            local_vars: Vec::new(),
             call_break: false,
             call_continue: false,
             call_return: false,
@@ -28,79 +32,96 @@ impl VirtualMachine {
         self.modules.insert(name.to_string(), module);
     }
 
-    pub fn execute(&mut self, code: &Vec<u8>) -> Value {
-        let mut reader = ByteReader::new(&code);
-
+    pub fn execute(&mut self, code: &'a Code) -> Value {
         self.call_break = false;
         self.call_continue = false;
         self.call_return = false;
 
-        while let Some(byte) = reader.read_byte() {
-            let bytecode = ByteCode::from_u8(byte);
-
-            if bytecode.is_none() {
-                panic!("Invalid bytecode: 0x{:02X}", byte);
-            }
-
-            match bytecode.unwrap() {
-                ByteCode::None => {}
-                ByteCode::Hi => {
+        for instruction in code.iter() {
+            match instruction {
+                Instruction::None => {}
+                Instruction::Version {
+                    major: _,
+                    minor: _,
+                    patch: _,
+                } => {}
+                Instruction::Dump => {
+                    // Show the stack and locals
+                    println!("Stack: {:?}", self.stack);
+                    println!("Locals: {:?}", self.local_vars);
+                }
+                Instruction::Hi => {
                     println!("Hi!");
                 }
-                ByteCode::Dump => {
-                    println!("{:?}", self.stack);
+                Instruction::Func { name: _, code: _ } => {
+                    panic!("Function call not allowed here");
                 }
-                ByteCode::Func => {
-                    panic!("Function not expected");
-                }
-                ByteCode::Call => {
-                    let module = reader.read_string().unwrap();
-                    let name = reader.read_string().unwrap();
-
-                    let args = self.arg_stack.clone();
-
-                    let result = self.call(&module, &name, args);
-
+                Instruction::Call { module, function } => {
+                    let args = self.stack.split_off(0);
+                    let result = self.call(module, function, args);
                     self.stack.push(result);
-
-                    self.arg_stack.clear();
                 }
-                ByteCode::PushConstString => {
-                    let string = reader.read_string().unwrap();
-
-                    self.stack.push(Value::String(string));
+                Instruction::PushConstString { value } => {
+                    self.stack.push(Value::String(value.clone()));
                 }
-                ByteCode::PushConstInt => {
-                    let value = reader.read_i32().unwrap();
-
-                    self.stack.push(Value::Integer(value));
+                Instruction::PushConstInteger { value } => {
+                    self.stack.push(Value::Integer(*value));
                 }
-                ByteCode::PushConstFloat => {
-                    let value = reader.read_f32().unwrap();
-
-                    self.stack.push(Value::Float(value));
+                Instruction::PushConstFloat { value } => {
+                    self.stack.push(Value::Float(*value));
                 }
-                ByteCode::PushArg => {
-                    let value = self.stack.pop().unwrap();
-
-                    self.arg_stack.push(value);
+                Instruction::PushConstBoolean { value } => {
+                    self.stack.push(Value::Boolean(*value));
                 }
-                ByteCode::PopArg => {
-                    let value = self.arg_stack.pop().unwrap();
-
-                    self.stack.push(value);
+                Instruction::GetLocal { index } => {
+                    if let Some(value) = self.local_vars.last() {
+                        if let Some(value) = value.get(*index as usize) {
+                            self.stack.push(value.clone());
+                        } else {
+                            panic!("Local variable not found");
+                        }
+                    } else {
+                        panic!("Local variable not found");
+                    }
                 }
-                ByteCode::Pop => {
-                    self.stack.pop();
+                Instruction::SetLocal { index } => {
+                    if let Some(value) = self.stack.pop() {
+                        if let Some(locals) = self.local_vars.last_mut() {
+                            locals[*index as usize] = value.clone();
+                        } else {
+                            panic!("Local variable not found");
+                        }
+                    } else {
+                        panic!("Local variable not found");
+                    }
                 }
-                ByteCode::Dup => {
-                    let value = self.stack.last().unwrap().clone();
-
-                    self.stack.push(value);
+                Instruction::ReserveLocal { size } => {
+                    if let Some(locals) = self.local_vars.last_mut() {
+                        locals.resize(*size as usize, Value::Null);
+                    } else {
+                        panic!("Local variable not found");
+                    }
                 }
-                ByteCode::Add => {
-                    let a = self.stack.pop().unwrap();
-                    let b = self.stack.pop().unwrap();
+                Instruction::Pop => {
+                    if let Some(_) = self.stack.pop() {
+                    } else {
+                        panic!("No elements in the stack");
+                    }
+                }
+                Instruction::Dup => {
+                    if let Some(arg) = self.stack.last() {
+                        self.stack.push(arg.clone());
+                    } else {
+                        panic!("No elements in the stack");
+                    }
+                }
+                Instruction::Add => {
+                    let Some(a) = self.stack.pop() else {
+                        panic!("No elements in the stack");
+                    };
+                    let Some(b) = self.stack.pop() else {
+                        panic!("No elements in the stack");
+                    };
 
                     match (a, b) {
                         (Value::Integer(a), Value::Integer(b)) => {
@@ -109,14 +130,21 @@ impl VirtualMachine {
                         (Value::Float(a), Value::Float(b)) => {
                             self.stack.push(Value::Float(a + b));
                         }
+                        (Value::String(a), Value::String(b)) => {
+                            self.stack.push(Value::String(format!("{}{}", a, b)));
+                        }
                         _ => {
                             panic!("Invalid types");
                         }
                     }
                 }
-                ByteCode::Sub => {
-                    let a = self.stack.pop().unwrap();
-                    let b = self.stack.pop().unwrap();
+                Instruction::Sub => {
+                    let Some(a) = self.stack.pop() else {
+                        panic!("No elements in the stack");
+                    };
+                    let Some(b) = self.stack.pop() else {
+                        panic!("No elements in the stack");
+                    };
 
                     match (a, b) {
                         (Value::Integer(a), Value::Integer(b)) => {
@@ -130,9 +158,13 @@ impl VirtualMachine {
                         }
                     }
                 }
-                ByteCode::Mul => {
-                    let a = self.stack.pop().unwrap();
-                    let b = self.stack.pop().unwrap();
+                Instruction::Mul => {
+                    let Some(a) = self.stack.pop() else {
+                        panic!("No elements in the stack");
+                    };
+                    let Some(b) = self.stack.pop() else {
+                        panic!("No elements in the stack");
+                    };
 
                     match (a, b) {
                         (Value::Integer(a), Value::Integer(b)) => {
@@ -146,9 +178,13 @@ impl VirtualMachine {
                         }
                     }
                 }
-                ByteCode::Div => {
-                    let a = self.stack.pop().unwrap();
-                    let b = self.stack.pop().unwrap();
+                Instruction::Div => {
+                    let Some(a) = self.stack.pop() else {
+                        panic!("No elements in the stack");
+                    };
+                    let Some(b) = self.stack.pop() else {
+                        panic!("No elements in the stack");
+                    };
 
                     match (a, b) {
                         (Value::Integer(a), Value::Integer(b)) => {
@@ -162,156 +198,189 @@ impl VirtualMachine {
                         }
                     }
                 }
-                ByteCode::Eq => {
-                    let a = self.stack.pop().unwrap();
-                    let b = self.stack.pop().unwrap();
+                Instruction::Eq => {
+                    let Some(a) = self.stack.pop() else {
+                        panic!("No elements in the stack");
+                    };
+                    let Some(b) = self.stack.pop() else {
+                        panic!("No elements in the stack");
+                    };
 
                     match (a, b) {
                         (Value::Integer(a), Value::Integer(b)) => {
-                            self.stack.push(Value::Integer(if a == b { 1 } else { 0 }));
+                            self.stack.push(Value::Boolean(a == b));
                         }
                         (Value::Float(a), Value::Float(b)) => {
-                            self.stack.push(Value::Integer(if a == b { 1 } else { 0 }));
+                            self.stack.push(Value::Boolean(a == b));
+                        }
+                        (Value::String(a), Value::String(b)) => {
+                            self.stack.push(Value::Boolean(a == b));
+                        }
+                        (Value::Boolean(a), Value::Boolean(b)) => {
+                            self.stack.push(Value::Boolean(a == b));
                         }
                         _ => {
                             panic!("Invalid types");
                         }
                     }
                 }
-                ByteCode::Ne => {
-                    let a = self.stack.pop().unwrap();
-                    let b = self.stack.pop().unwrap();
+                Instruction::Ne => {
+                    let Some(a) = self.stack.pop() else {
+                        panic!("No elements in the stack");
+                    };
+                    let Some(b) = self.stack.pop() else {
+                        panic!("No elements in the stack");
+                    };
 
                     match (a, b) {
                         (Value::Integer(a), Value::Integer(b)) => {
-                            self.stack.push(Value::Integer(if a != b { 1 } else { 0 }));
+                            self.stack.push(Value::Boolean(a != b));
                         }
                         (Value::Float(a), Value::Float(b)) => {
-                            self.stack.push(Value::Integer(if a != b { 1 } else { 0 }));
+                            self.stack.push(Value::Boolean(a != b));
+                        }
+                        (Value::String(a), Value::String(b)) => {
+                            self.stack.push(Value::Boolean(a != b));
+                        }
+                        (Value::Boolean(a), Value::Boolean(b)) => {
+                            self.stack.push(Value::Boolean(a != b));
                         }
                         _ => {
                             panic!("Invalid types");
                         }
                     }
                 }
-                ByteCode::Lt => {
-                    let a = self.stack.pop().unwrap();
-                    let b = self.stack.pop().unwrap();
+                Instruction::Lt => {
+                    let Some(a) = self.stack.pop() else {
+                        panic!("No elements in the stack");
+                    };
+                    let Some(b) = self.stack.pop() else {
+                        panic!("No elements in the stack");
+                    };
 
                     match (a, b) {
                         (Value::Integer(a), Value::Integer(b)) => {
-                            self.stack.push(Value::Integer(if a < b { 1 } else { 0 }));
+                            self.stack.push(Value::Boolean(a < b));
                         }
                         (Value::Float(a), Value::Float(b)) => {
-                            self.stack.push(Value::Integer(if a < b { 1 } else { 0 }));
+                            self.stack.push(Value::Boolean(a < b));
                         }
                         _ => {
                             panic!("Invalid types");
                         }
                     }
                 }
-                ByteCode::Le => {
-                    let a = self.stack.pop().unwrap();
-                    let b = self.stack.pop().unwrap();
+                Instruction::Le => {
+                    let Some(a) = self.stack.pop() else {
+                        panic!("No elements in the stack");
+                    };
+                    let Some(b) = self.stack.pop() else {
+                        panic!("No elements in the stack");
+                    };
 
                     match (a, b) {
                         (Value::Integer(a), Value::Integer(b)) => {
-                            self.stack.push(Value::Integer(if a <= b { 1 } else { 0 }));
+                            self.stack.push(Value::Boolean(a <= b));
                         }
                         (Value::Float(a), Value::Float(b)) => {
-                            self.stack.push(Value::Integer(if a <= b { 1 } else { 0 }));
+                            self.stack.push(Value::Boolean(a <= b));
                         }
                         _ => {
                             panic!("Invalid types");
                         }
                     }
                 }
-                ByteCode::Gt => {
-                    let a = self.stack.pop().unwrap();
-                    let b = self.stack.pop().unwrap();
+                Instruction::Gt => {
+                    let Some(a) = self.stack.pop() else {
+                        panic!("No elements in the stack");
+                    };
+                    let Some(b) = self.stack.pop() else {
+                        panic!("No elements in the stack");
+                    };
 
                     match (a, b) {
                         (Value::Integer(a), Value::Integer(b)) => {
-                            self.stack.push(Value::Integer(if a > b { 1 } else { 0 }));
+                            self.stack.push(Value::Boolean(a > b));
                         }
                         (Value::Float(a), Value::Float(b)) => {
-                            self.stack.push(Value::Integer(if a > b { 1 } else { 0 }));
+                            self.stack.push(Value::Boolean(a > b));
                         }
                         _ => {
                             panic!("Invalid types");
                         }
                     }
                 }
-                ByteCode::Ge => {
-                    let a = self.stack.pop().unwrap();
-                    let b = self.stack.pop().unwrap();
+                Instruction::Ge => {
+                    let Some(a) = self.stack.pop() else {
+                        panic!("No elements in the stack");
+                    };
+                    let Some(b) = self.stack.pop() else {
+                        panic!("No elements in the stack");
+                    };
 
                     match (a, b) {
                         (Value::Integer(a), Value::Integer(b)) => {
-                            self.stack.push(Value::Integer(if a >= b { 1 } else { 0 }));
+                            self.stack.push(Value::Boolean(a >= b));
                         }
                         (Value::Float(a), Value::Float(b)) => {
-                            self.stack.push(Value::Integer(if a >= b { 1 } else { 0 }));
+                            self.stack.push(Value::Boolean(a >= b));
                         }
                         _ => {
                             panic!("Invalid types");
                         }
                     }
                 }
-                ByteCode::Ret => {
+                Instruction::Return => {
                     self.call_return = true;
-                    return self.stack.pop().unwrap();
-                }
-                ByteCode::If => {
-                    let length = reader.read_u32().unwrap() as usize; // Read the length of the block
-                    let block = reader.read_bytes(length).unwrap(); // Read the block
 
-                    let condition = self.stack.pop().unwrap();
-
-                    if let Value::Integer(1) = condition {
-                        self.execute(&block);
+                    if let Some(value) = self.stack.pop() {
+                        return value.clone();
                     } else {
-                        reader.jump(length);
+                        return Value::Null;
                     }
                 }
-                ByteCode::Else => {
-                    let length = reader.read_u32().unwrap() as usize; // Read the length of the block
-                    let block = reader.read_bytes(length).unwrap(); // Read the block
+                Instruction::If {
+                    if_block,
+                    else_block,
+                } => {
+                    let Some(value) = self.stack.pop() else {
+                        panic!("No elements in the stack");
+                    };
 
-                    if let Value::Integer(0) = self.stack.pop().unwrap() {
-                        self.execute(&block);
-                    } else {
-                        reader.jump(length);
-                    }
-                }
-                ByteCode::Break => {
-                    return Value::Null;
-                }
-                ByteCode::Continue => {
-                    return Value::Null;
-                }
-                ByteCode::Loop => {
-                    let length = reader.read_u32().unwrap() as usize; // Read the length of the block
-                    let block = reader.read_bytes(length).unwrap(); // Read the block
-
-                    loop {
-                        let result = self.execute(&block);
+                    if let Value::Boolean(value) = value {
+                        let result = if value {
+                            self.execute(if_block)
+                        } else {
+                            self.execute(else_block)
+                        };
 
                         if self.call_return {
-                            self.call_return = false;
                             return result;
                         }
-
-                        if self.call_continue {
-                            self.call_continue = false;
-                            continue;
-                        }
-
-                        if self.call_break {
-                            self.call_break = false;
-                            break;
-                        }
+                    } else {
+                        panic!("Invalid value");
                     }
+                }
+                Instruction::Loop { block } => loop {
+                    let result = self.execute(block);
+
+                    if self.call_break {
+                        break;
+                    }
+
+                    if self.call_continue {
+                        continue;
+                    }
+
+                    if self.call_return {
+                        return result;
+                    }
+                },
+                Instruction::Break => {
+                    self.call_break = true;
+                }
+                Instruction::Continue => {
+                    self.call_continue = true;
                 }
             }
         }
@@ -324,9 +393,12 @@ impl VirtualMachine {
 
         if let Some(function) = module.get_function(name) {
             match function {
-                crate::Function::ByteCode { name: _, code } => {
+                crate::Function::Code { name: _, code } => {
+                    self.local_vars.push(args);
                     let code = code.clone();
-                    return self.execute(&code);
+                    let result = self.execute(&code);
+                    self.local_vars.pop();
+                    return result;
                 }
                 crate::Function::Native { name: _, function } => {
                     return function(args);

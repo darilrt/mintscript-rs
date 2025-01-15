@@ -32,6 +32,11 @@ impl<'a> ByteWriter<'a> {
     }
 
     #[inline]
+    pub fn write_bool(&mut self, value: bool) {
+        self.source.push(if value { 1 } else { 0 });
+    }
+
+    #[inline]
     pub fn write_string(&mut self, value: &str) {
         self.write_u32(value.len() as u32);
         self.source.extend(value.as_bytes());

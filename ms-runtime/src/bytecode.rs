@@ -1,6 +1,9 @@
+#[repr(u8)]
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum ByteCode {
     None = 0x00, // No operation (NOP)
+
+    Version = 0x17, // VERSION <major: u8> <minor: u8> <patch: u8>
 
     // Debugging
     Dump = 0x01, // Dump the stack
@@ -11,13 +14,15 @@ pub enum ByteCode {
     Call = 0x04, // Call a function
 
     // Constants
-    PushConstString = 0x06, // Push a constant string onto the stack PushConstString <len: u32> <string: [u8; len]>
-    PushConstInt = 0x07,    // Push a constant integer onto the stack PushConstInt <value: i32>
-    PushConstFloat = 0x08,  // Push a constant float onto the stack PushConstFloat <value: f32>
+    PushConstString = 0x40, // Push a constant string onto the stack PushConstString <len: u32> <string: [u8; len]>
+    PushConstInteger = 0x41, // Push a constant integer onto the stack PushConstInt <value: i32>
+    PushConstFloat = 0x42,  // Push a constant float onto the stack PushConstFloat <value: f32>
+    PushConstBoolean = 0x43, // Push a constant boolean onto the stack PushConstBoolean <value: bool>
 
-    // Function arguments
-    PushArg = 0x09, // Push the top element of the stack onto the argument stack
-    PopArg = 0x0A,  // Pop the top element of the argument stack and push it onto the stack
+    // Locals variables
+    GetLocal = 0x09,     // Load a local variable onto the stack
+    SetLocal = 0x0A,     // Store the top element of the stack in a local variable
+    ReserveLocal = 0x18, // Reserve space for a local variable
 
     // Stack manipulation
     Pop = 0x0B, // Pop the top element of the stack
@@ -38,7 +43,7 @@ pub enum ByteCode {
     Ge = 0x16, // Greater than or equal
 
     // Control flow
-    Ret = 0xFE,      // Return from the current function
+    Return = 0xFE,   // Return from the current function
     If = 0xFD,       // IF <block: [ByteCode]> END Execute a block of code conditionally
     Else = 0xFC, // IF <block: [ByteCode]> ELSE <block: [ByteCode]> END Execute a block of code conditionally
     Loop = 0xFB, // LOOP <block: [ByteCode]> END Execute a block of code in a loop until instructed to break
@@ -50,15 +55,18 @@ impl ByteCode {
     pub fn from_u8(value: u8) -> Option<ByteCode> {
         match value {
             0x00 => Some(ByteCode::None),
+            0x17 => Some(ByteCode::Version),
             0x01 => Some(ByteCode::Dump),
             0x02 => Some(ByteCode::Hi),
             0x03 => Some(ByteCode::Func),
             0x04 => Some(ByteCode::Call),
-            0x06 => Some(ByteCode::PushConstString),
-            0x07 => Some(ByteCode::PushConstInt),
-            0x08 => Some(ByteCode::PushConstFloat),
-            0x09 => Some(ByteCode::PushArg),
-            0x0A => Some(ByteCode::PopArg),
+            0x40 => Some(ByteCode::PushConstString),
+            0x41 => Some(ByteCode::PushConstInteger),
+            0x42 => Some(ByteCode::PushConstFloat),
+            0x43 => Some(ByteCode::PushConstBoolean),
+            0x09 => Some(ByteCode::GetLocal),
+            0x0A => Some(ByteCode::SetLocal),
+            0x18 => Some(ByteCode::ReserveLocal),
             0x0B => Some(ByteCode::Pop),
             0x0C => Some(ByteCode::Dup),
             0x0D => Some(ByteCode::Add),
@@ -71,7 +79,7 @@ impl ByteCode {
             0x14 => Some(ByteCode::Le),
             0x15 => Some(ByteCode::Gt),
             0x16 => Some(ByteCode::Ge),
-            0xFE => Some(ByteCode::Ret),
+            0xFE => Some(ByteCode::Return),
             0xFD => Some(ByteCode::If),
             0xFC => Some(ByteCode::Else),
             0xFB => Some(ByteCode::Loop),

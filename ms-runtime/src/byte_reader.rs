@@ -49,6 +49,12 @@ impl<'a> ByteReader<'a> {
         Some(f32::from_le_bytes([bytes[3], bytes[2], bytes[1], bytes[0]]))
     }
 
+    pub fn read_bool(&mut self) -> Option<bool> {
+        let byte = self.read_byte()?;
+
+        Some(byte != 0)
+    }
+
     // Read a string from the source with the following format:
     // <length: u32> <string: [u8 x length]>
     pub fn read_string(&mut self) -> Option<String> {
