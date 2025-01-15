@@ -30,9 +30,12 @@ The following opcodes are defined:
 - `STRPUSH` (0x05): STRPUSH <value: string> Push a string onto the stack.
 - `INTPUSH` (0x06): INTPUSH <value: i32> Push an integer onto the stack.
 - `FLOATPUSH` (0x07): FLTPUSH <value: f32> Push a float onto the stack.
-- `LOCALLOAD` (0x08): LOCALLOAD <index: u32> Push the local variable at the given index onto the stack.
-- `LOCALSTORE` (0x09): LOCALSTORE <index: u32> Pop the top element of the stack and store it in the local variable at the given index.
-- `LOCARES` (0x18) LOCA <index: u32> Reserve space for a local variable at the given index.
+- `LOCALGET` (0x08): LOCALGET <index: u32> Push the local variable at the given index onto the stack.
+- `LOCALSET` (0x09): LOCALSET <index: u32> Pop the top element of the stack and store it in the local variable at the given index.
+- `LOCARES` (0x18) LOCARES <index: u32> Reserve space for a local variable at the given index.
+- `ALLOC` (0x19) ALLOC <size: u32> Allocate a object of the given amount of fields on the top of the stack.
+- `FIELDGET` (0x1A) FIELDGET <index: u32> Push the value of the field at the given index of the object on the top of the stack.
+- `FIELDSET` (0x1B) FIELDSET <index: u32> Pop the top element of the stack and store it in the field at the given index of the object on the top of the stack. 
 - `POP` (0x0A): POP Pop the top element of the stack.
 - `DUP` (0x0B): DUP Duplicate the top element of the stack.
 - `ADD` (0x0C): ADD Pop two elements from the stack, add them, and push the result.

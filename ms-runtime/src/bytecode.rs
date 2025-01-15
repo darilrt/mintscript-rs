@@ -24,6 +24,11 @@ pub enum ByteCode {
     SetLocal = 0x0A,     // Store the top element of the stack in a local variable
     ReserveLocal = 0x18, // Reserve space for a local variable
 
+    // Objects
+    Allocate = 0x05, // Allocate a new object with the given number of fields on top of the stack
+    GetField = 0x06, // Push the value of a field of an object in the top element of the stack
+    SetField = 0x07, // Set the value of the top element of the stack into a field of an object on the second element of the stack
+
     // Stack manipulation
     Pop = 0x0B, // Pop the top element of the stack
     Dup = 0x0C, // Duplicate the top element of the stack
@@ -67,6 +72,9 @@ impl ByteCode {
             0x09 => Some(ByteCode::GetLocal),
             0x0A => Some(ByteCode::SetLocal),
             0x18 => Some(ByteCode::ReserveLocal),
+            0x05 => Some(ByteCode::Allocate),
+            0x06 => Some(ByteCode::GetField),
+            0x07 => Some(ByteCode::SetField),
             0x0B => Some(ByteCode::Pop),
             0x0C => Some(ByteCode::Dup),
             0x0D => Some(ByteCode::Add),

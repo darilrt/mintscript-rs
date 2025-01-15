@@ -25,6 +25,11 @@ pub enum Instruction {
     SetLocal { index: u32 },
     ReserveLocal { size: u32 },
 
+    // Objects
+    Allocate { fields: u32 },
+    GetField { index: u32 },
+    SetField { index: u32 },
+
     // Stack manipulation
     Pop,
     Dup,
@@ -153,6 +158,27 @@ impl<'a> Instruction {
                     };
 
                     code.push(Instruction::GetLocal { index: index });
+                }
+                ByteCode::Allocate => {
+                    let Some(fields) = reader.read_u32() else {
+                        return Err("Expected number of fields".to_string());
+                    };
+
+                    code.push(Instruction::Allocate { fields: fields });
+                }
+                ByteCode::GetField => {
+                    let Some(index) = reader.read_u32() else {
+                        return Err("Expected field index".to_string());
+                    };
+
+                    code.push(Instruction::GetField { index: index });
+                }
+                ByteCode::SetField => {
+                    let Some(index) = reader.read_u32() else {
+                        return Err("Expected field index".to_string());
+                    };
+
+                    code.push(Instruction::SetField { index: index });
                 }
                 ByteCode::SetLocal => {
                     let Some(index) = reader.read_u32() else {
@@ -293,6 +319,18 @@ impl<'a> Instruction {
             }
             Instruction::ReserveLocal { size: index } => {
                 writer.write_byte(ByteCode::ReserveLocal as u8);
+                writer.write_u32(*index);
+            }
+            Instruction::Allocate { fields } => {
+                writer.write_byte(ByteCode::Allocate as u8);
+                writer.write_u32(*fields);
+            }
+            Instruction::GetField { index } => {
+                writer.write_byte(ByteCode::GetField as u8);
+                writer.write_u32(*index);
+            }
+            Instruction::SetField { index } => {
+                writer.write_byte(ByteCode::SetField as u8);
                 writer.write_u32(*index);
             }
             Instruction::Pop => writer.write_byte(ByteCode::Pop as u8),

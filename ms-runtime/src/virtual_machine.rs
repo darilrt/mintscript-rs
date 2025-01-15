@@ -1,10 +1,13 @@
 use core::panic;
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use crate::{
     instruction::{Code, Instruction},
     module::Module,
-    Value,
+    Object, Value,
 };
 
 pub struct VirtualMachine {
@@ -100,6 +103,61 @@ impl<'a> VirtualMachine {
                         locals.resize(*size as usize, Value::Null);
                     } else {
                         panic!("Local variable not found");
+                    }
+                }
+                Instruction::Allocate { fields } => {
+                    let fields = vec![Value::Null; *fields as usize];
+                    self.stack
+                        .push(Value::Object(Arc::new(Mutex::new(Object::Values(fields)))));
+                }
+                Instruction::GetField { index } => {
+                    let Some(object) = self.stack.pop() else {
+                        panic!("No elements in the stack expected an object");
+                    };
+
+                    if let Value::Object(object) = object {
+                        let lock = object.lock();
+                        let object = lock.as_deref().unwrap();
+
+                        if let Object::Values(fields) = object {
+                            if let Some(value) = fields.get(*index as usize) {
+                                self.stack.push(value.clone());
+                            } else {
+                                panic!("Field not found");
+                            }
+                        } else {
+                            panic!("Expected an object with fields");
+                        }
+                    } else {
+                        panic!("Expected an object");
+                    }
+                }
+                Instruction::SetField { index } => {
+                    let Some(value) = self.stack.pop() else {
+                        panic!("No elements in the stack expected a value");
+                    };
+                    let Some(object) = self.stack.last() else {
+                        panic!("No elements in the stack expected an object");
+                    };
+
+                    if let Value::Object(object) = object {
+                        let mut lock = object.lock();
+                        let object = lock.as_deref_mut().unwrap();
+
+                        match object {
+                            Object::Values(fields) => {
+                                if let Some(_) = fields.get(*index as usize) {
+                                    fields[*index as usize] = value.clone();
+                                } else {
+                                    panic!("Field not found");
+                                }
+                            }
+                            _ => {
+                                panic!("Expected an object with fields");
+                            }
+                        }
+                    } else {
+                        panic!("Expected an object");
                     }
                 }
                 Instruction::Pop => {

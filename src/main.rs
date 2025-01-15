@@ -53,30 +53,38 @@ fn main() {
             patch: VERSION_PATCH,
         },
         Instruction::Func {
-            name: "foo".to_string(),
+            // print Hy Bessie 4
+            name: "hi".to_string(),
             code: vec![
+                Instruction::PushConstString {
+                    value: "Hi".to_string(),
+                },
                 Instruction::GetLocal { index: 0 },
+                Instruction::GetField { index: 0 },
+                Instruction::GetLocal { index: 0 },
+                Instruction::GetField { index: 1 },
                 Instruction::Call {
                     module: "std".to_string(),
                     function: "print".to_string(),
                 },
-                Instruction::Pop, // Pop the return value
-                Instruction::GetLocal { index: 1 },
-                Instruction::Call {
-                    module: "std".to_string(),
-                    function: "print".to_string(),
-                },
+                Instruction::Pop,
             ],
         },
         Instruction::Func {
             name: "main".to_string(),
             code: vec![
-                Instruction::PushConstInteger { value: 1 },
-                Instruction::PushConstInteger { value: 2 },
+                Instruction::Allocate { fields: 2 }, // Cow { name: "Bessie", age: 4 }
+                Instruction::PushConstString {
+                    value: "Bessie".to_string(),
+                },
+                Instruction::SetField { index: 0 },
+                Instruction::PushConstInteger { value: 4 },
+                Instruction::SetField { index: 1 },
                 Instruction::Call {
                     module: "main".to_string(),
-                    function: "foo".to_string(),
+                    function: "hi".to_string(),
                 },
+                Instruction::Pop,
             ],
         },
     ];
