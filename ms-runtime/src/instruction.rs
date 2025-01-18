@@ -1,34 +1,65 @@
-use crate::{byte_reader::ByteReader, byte_writer::ByteWriter, ByteCode};
+use crate::{byte_reader::ByteReader, byte_writer::ByteWriter, sexpr::SExpr, ByteCode};
 
 #[derive(Debug, Clone)]
 pub enum Instruction {
     None,
 
-    Version { major: u8, minor: u8, patch: u8 },
+    Version {
+        major: u8,
+        minor: u8,
+        patch: u8,
+    },
 
     // Debugging
     Dump,
     Hi,
 
     // Functions
-    Func { name: String, code: Code },
-    Call { module: String, function: String },
+    Fn {
+        name: String,
+        code: Code,
+    },
+    Call {
+        module: String,
+        function: String,
+        param_count: u32,
+    },
 
     // Constants
-    PushConstString { value: String },
-    PushConstInteger { value: i32 },
-    PushConstFloat { value: f32 },
-    PushConstBoolean { value: bool },
+    PushConstString {
+        value: String,
+    },
+    PushConstInteger {
+        value: i32,
+    },
+    PushConstFloat {
+        value: f32,
+    },
+    PushConstBoolean {
+        value: bool,
+    },
 
     // Locals variables
-    GetLocal { index: u32 },
-    SetLocal { index: u32 },
-    ReserveLocal { size: u32 },
+    GetLocal {
+        index: u32,
+    },
+    SetLocal {
+        index: u32,
+    },
+    ReserveLocal {
+        size: u32,
+    },
 
     // Objects
-    Allocate { fields: u32 },
-    GetField { index: u32 },
-    SetField { index: u32 },
+    Allocate {
+        fields: u32,
+    },
+    GetField {
+        index: u32,
+    },
+    SetField {
+        index: u32,
+    },
 
     // Stack manipulation
     Pop,
@@ -50,8 +81,13 @@ pub enum Instruction {
 
     // Control flow
     Return,
-    If { if_block: Code, else_block: Code },
-    Loop { block: Code },
+    If {
+        if_block: Code,
+        else_block: Code,
+    },
+    Loop {
+        block: Code,
+    },
     Break,
     Continue,
 }
@@ -105,7 +141,7 @@ impl<'a> Instruction {
                     };
 
                     // This can be done in multy threads
-                    code.push(Instruction::Func {
+                    code.push(Instruction::Fn {
                         name: name,
                         code: Instruction::from_bytecode(&fn_code)?,
                     });
@@ -119,9 +155,14 @@ impl<'a> Instruction {
                         return Err("Expected function name".to_string());
                     };
 
+                    let Some(param_count) = reader.read_u32() else {
+                        return Err("Expected parameter count".to_string());
+                    };
+
                     code.push(Instruction::Call {
-                        module: module,
-                        function: function,
+                        module,
+                        function,
+                        param_count,
                     });
                 }
                 ByteCode::PushConstString => {
@@ -279,7 +320,7 @@ impl<'a> Instruction {
             }
             Instruction::Dump => writer.write_byte(ByteCode::Dump as u8),
             Instruction::Hi => writer.write_byte(ByteCode::Hi as u8),
-            Instruction::Func { name, code } => {
+            Instruction::Fn { name, code } => {
                 writer.write_byte(ByteCode::Func as u8);
 
                 let code_bytes = Instruction::code_to_bytes(code);
@@ -288,10 +329,15 @@ impl<'a> Instruction {
                 writer.write_string(name);
                 writer.write_bytes(&code_bytes);
             }
-            Instruction::Call { module, function } => {
+            Instruction::Call {
+                module,
+                function,
+                param_count,
+            } => {
                 writer.write_byte(ByteCode::Call as u8);
                 writer.write_string(module);
                 writer.write_string(function);
+                writer.write_u32(*param_count);
             }
             Instruction::PushConstString { value } => {
                 writer.write_byte(ByteCode::PushConstString as u8);
@@ -391,6 +437,237 @@ impl<'a> Instruction {
         }
 
         bytes
+    }
+
+    // Convert a S-expression to an instruction
+    pub fn from_sexpr(sexpr: &SExpr) -> Result<Instruction, String> {
+        match sexpr {
+            SExpr::Atom(value) => Err(format!("Unexpected atom: {}", value)),
+            SExpr::List(values) => {
+                let mut it = values.iter();
+
+                let name = match it.next() {
+                    Some(SExpr::Atom(name)) => name,
+                    _ => return Err("Expected function name".to_string()),
+                };
+
+                match name.as_str() {
+                    "version" => {
+                        let version = match it.next() {
+                            Some(SExpr::Atom(value)) => value,
+                            _ => return Err("Expected major version".to_string()),
+                        };
+
+                        let mut version = version.split(".");
+
+                        let major = version.next().unwrap().parse::<u8>().unwrap();
+                        let minor = version.next().unwrap().parse::<u8>().unwrap();
+                        let patch = version.next().unwrap().parse::<u8>().unwrap();
+
+                        Ok(Instruction::Version {
+                            major: major,
+                            minor: minor,
+                            patch: patch,
+                        })
+                    }
+                    "dump" => Ok(Instruction::Dump),
+                    "hi" => Ok(Instruction::Hi),
+                    "fn" => {
+                        let name = match it.next() {
+                            Some(SExpr::Atom(value)) => value,
+                            _ => return Err("Expected function name".to_string()),
+                        };
+
+                        let mut code = Vec::new();
+
+                        while let Some(value) = it.next() {
+                            let instruction = Instruction::from_sexpr(value)?;
+                            code.push(instruction);
+                        }
+
+                        Ok(Instruction::Fn {
+                            name: name.to_string(),
+                            code,
+                        })
+                    }
+                    "call" => {
+                        let module = match it.next() {
+                            Some(SExpr::Atom(value)) => value,
+                            _ => return Err("Expected module name".to_string()),
+                        };
+
+                        let function = match it.next() {
+                            Some(SExpr::Atom(value)) => value,
+                            _ => return Err("Expected function name".to_string()),
+                        };
+
+                        let param_count = match it.next() {
+                            Some(SExpr::Atom(value)) => value.parse::<u32>().unwrap(),
+                            _ => return Err("Expected parameter count".to_string()),
+                        };
+
+                        Ok(Instruction::Call {
+                            module: module.to_string(),
+                            function: function.to_string(),
+                            param_count,
+                        })
+                    }
+                    "str.const" => {
+                        let value = match it.next() {
+                            Some(SExpr::Atom(value)) => value,
+                            _ => return Err("Expected string value".to_string()),
+                        };
+
+                        Ok(Instruction::PushConstString {
+                            value: value.to_string(),
+                        })
+                    }
+                    "i32.const" => {
+                        let value = match it.next() {
+                            Some(SExpr::Atom(value)) => value.parse::<i32>().unwrap(),
+                            _ => return Err("Expected integer value".to_string()),
+                        };
+
+                        Ok(Instruction::PushConstInteger { value })
+                    }
+                    "f32.const" => {
+                        let value = match it.next() {
+                            Some(SExpr::Atom(value)) => value.parse::<f32>().unwrap(),
+                            _ => return Err("Expected float value".to_string()),
+                        };
+
+                        Ok(Instruction::PushConstFloat { value })
+                    }
+                    "bool.const" => {
+                        let value = match it.next() {
+                            Some(SExpr::Atom(value)) => value.parse::<bool>().unwrap(),
+                            _ => return Err("Expected boolean value".to_string()),
+                        };
+
+                        Ok(Instruction::PushConstBoolean { value })
+                    }
+                    "local.get" => {
+                        let index = match it.next() {
+                            Some(SExpr::Atom(value)) => value.parse::<u32>().unwrap(),
+                            _ => return Err("Expected local index".to_string()),
+                        };
+
+                        Ok(Instruction::GetLocal { index })
+                    }
+                    "local.set" => {
+                        let index = match it.next() {
+                            Some(SExpr::Atom(value)) => value.parse::<u32>().unwrap(),
+                            _ => return Err("Expected local index".to_string()),
+                        };
+
+                        Ok(Instruction::SetLocal { index })
+                    }
+                    "local.reserve" => {
+                        let size = match it.next() {
+                            Some(SExpr::Atom(value)) => value.parse::<u32>().unwrap(),
+                            _ => return Err("Expected local size".to_string()),
+                        };
+
+                        Ok(Instruction::ReserveLocal { size })
+                    }
+                    "alloc" => {
+                        let fields = match it.next() {
+                            Some(SExpr::Atom(value)) => value.parse::<u32>().unwrap(),
+                            _ => return Err("Expected number of fields".to_string()),
+                        };
+
+                        Ok(Instruction::Allocate { fields })
+                    }
+                    "field.get" => {
+                        let index = match it.next() {
+                            Some(SExpr::Atom(value)) => value.parse::<u32>().unwrap(),
+                            _ => return Err("Expected field index".to_string()),
+                        };
+
+                        Ok(Instruction::GetField { index })
+                    }
+                    "field.set" => {
+                        let index = match it.next() {
+                            Some(SExpr::Atom(value)) => value.parse::<u32>().unwrap(),
+                            _ => return Err("Expected field index".to_string()),
+                        };
+
+                        Ok(Instruction::SetField { index })
+                    }
+                    "pop" => Ok(Instruction::Pop),
+                    "dup" => Ok(Instruction::Dup),
+                    "op.add" => Ok(Instruction::Add),
+                    "op.sub" => Ok(Instruction::Sub),
+                    "op.mul" => Ok(Instruction::Mul),
+                    "op.div" => Ok(Instruction::Div),
+                    "cmp.eq" => Ok(Instruction::Eq),
+                    "cmp.ne" => Ok(Instruction::Ne),
+                    "cmp.lt" => Ok(Instruction::Lt),
+                    "cmp.le" => Ok(Instruction::Le),
+                    "cmp.gt" => Ok(Instruction::Gt),
+                    "cmp.ge" => Ok(Instruction::Ge),
+                    "return" => Ok(Instruction::Return),
+                    "if" => {
+                        let mut if_block = Vec::new();
+                        let mut else_block = Vec::new();
+
+                        let mut has_else = false;
+
+                        while let Some(value) = it.next() {
+                            match value {
+                                SExpr::Atom(value) => {
+                                    if value == "else" {
+                                        has_else = true;
+                                        break;
+                                    } else {
+                                        return Err("Unexpected atom".to_string());
+                                    }
+                                }
+                                SExpr::List(_) => {
+                                    let instruction = Instruction::from_sexpr(value)?;
+                                    if_block.push(instruction);
+                                }
+                            }
+                        }
+
+                        if has_else {
+                            while let Some(value) = it.next() {
+                                match value {
+                                    SExpr::List(_) => {
+                                        let instruction = Instruction::from_sexpr(value)?;
+                                        else_block.push(instruction);
+                                    }
+                                    _ => return Err("Unexpected atom".to_string()),
+                                }
+                            }
+                        }
+
+                        Ok(Instruction::If {
+                            if_block: if_block,
+                            else_block: else_block,
+                        })
+                    }
+                    "loop" => {
+                        todo!()
+                    }
+                    "break" => Ok(Instruction::Break),
+                    "continue" => Ok(Instruction::Continue),
+                    _ => Err(format!("Unknown instruction: {}", name)),
+                }
+            }
+        }
+    }
+
+    // Convert a vector of S-expressions to a vector of instructions
+    pub fn from_sexprs(sexprs: &Vec<SExpr>) -> Result<Code, String> {
+        let mut code = Vec::new();
+
+        for sexpr in sexprs.iter() {
+            let inst = Instruction::from_sexpr(sexpr)?;
+            code.push(inst);
+        }
+
+        Ok(code)
     }
 }
 

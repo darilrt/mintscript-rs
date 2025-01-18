@@ -67,11 +67,6 @@ impl<'a> ByteReader<'a> {
         // Convert the bytes to a string
         Some(String::from_utf8(bytes).unwrap())
     }
-
-    // Jump an arbitrary number of bytes
-    pub fn jump(&mut self, count: usize) {
-        self.position += count;
-    }
 }
 
 #[cfg(test)]

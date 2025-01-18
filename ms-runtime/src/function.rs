@@ -7,6 +7,6 @@ pub enum Function {
     },
     Native {
         name: String,
-        function: Box<dyn Fn(Vec<Value>) -> Value>,
+        function: Box<dyn Fn(Vec<Value>) -> Option<Value>>,
     },
 }

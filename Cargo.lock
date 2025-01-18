@@ -7,8 +7,16 @@ name = "mint-script"
 version = "0.1.0"
 dependencies = [
  "ms-runtime",
+ "ms-stdlib",
 ]
 
 [[package]]
 name = "ms-runtime"
+version = "0.1.1"
+
+[[package]]
+name = "ms-stdlib"
 version = "0.1.0"
+dependencies = [
+ "ms-runtime",
+]

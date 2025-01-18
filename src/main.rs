@@ -1,102 +1,174 @@
-use std::vec;
+use ms_runtime::{asm::assemble, Instruction};
 
-use ms_runtime::*;
-use version::{VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH};
+// Print usage information
+// Usage: ms <subcommand>
+//   ms run <file> [options]
+//   ms compile <file> [options]
+fn usage() {
+    println!("Usage: ms <subcommand>");
+    println!("  ms run <file> [options]");
+    println!("  ms compile <file> [options]");
+}
 
-fn modules_std() -> Module {
-    let mut module = Module::new();
+struct Options {
+    output: String,
+    input: String,
+}
 
-    module.add_native_function(
-        "print",
-        Box::new(|args| {
-            let mut it = args.iter();
+impl Options {
+    fn new() -> Options {
+        Options {
+            output: String::new(),
+            input: String::new(),
+        }
+    }
+}
 
-            while let Some(arg) = it.next() {
-                match arg {
-                    Value::Integer(value) => print!("{}", value),
-                    Value::Float(value) => print!("{}", value),
-                    Value::String(value) => print!("{}", value),
-                    Value::Null => print!("null"),
-                    Value::Boolean(value) => print!("{}", value),
-                    Value::Object(value) => print!("{:?}", value),
-                }
+// run subcommand
+fn run(args: Vec<String>) {
+    // Check if the user provided a file to run
+    if args.len() == 0 {
+        println!("Error: No input file");
+        return;
+    }
 
-                if it.len() > 0 {
-                    print!(" ");
+    let mut options = Options::new();
+
+    // Parse options
+    let mut it = args.iter();
+
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "-h" | "--help" => {
+                println!("Usage: ms run <file>");
+                return;
+            }
+            _ => {
+                if options.input.is_empty() {
+                    options.input = arg.to_string();
+                } else {
+                    println!("Error: Invalid option '{}'", arg);
+                    return;
                 }
             }
+        }
+    }
 
-            println!();
-            Value::Null
-        }),
-    );
+    // Validate input file
+    if !options.input.ends_with(".ms")
+        && !options.input.ends_with(".msa")
+        && !options.input.ends_with(".msb")
+    {
+        println!("Error: Unsupported file extension");
+        return;
+    }
 
-    module.add_native_function(
-        "input",
-        Box::new(|_| {
-            let mut input = String::new();
-            std::io::stdin()
-                .read_line(&mut input)
-                .expect("Failed to read line");
-            Value::String(input.trim().to_string())
-        }),
-    );
+    let code = if options.input.ends_with(".ms") {
+        todo!()
+    } else if options.input.ends_with(".msa") {
+        assemble(&std::fs::read_to_string(&options.input).expect("Failed to read file"))
+            .expect("Failed to assemble code")
+    } else if options.input.ends_with(".msb") {
+        let source = std::fs::read(&options.input).expect("Failed to read file");
+        ms_runtime::Instruction::from_bytecode(&source).expect("Failed to load bytecode")
+    } else {
+        panic!("Unsupported file extension");
+    };
 
-    module
+    let main_module = ms_runtime::Module::try_from(code).expect("Failed to load module");
+
+    let mut vm = ms_runtime::VirtualMachine::new();
+    vm.load_module("std", ms_stdlib::get_module());
+    vm.load_module("main", main_module);
+
+    if !vm.has_function("main", "main") {
+        println!("Error: Missing 'main' function in {}", options.input);
+        return;
+    }
+
+    vm.call("main", "main", vec![]);
+}
+
+// compile subcommand
+fn compile(args: Vec<String>) {
+    // Check if the user provided a file to run
+    if args.len() == 0 {
+        println!("Error: No input file");
+        return;
+    }
+
+    let mut options = Options::new();
+
+    // Parse options
+    let mut it = args.iter();
+
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "-o" => {
+                if let Some(output) = it.next() {
+                    options.output = output.to_string();
+                } else {
+                    println!("Error: Missing output file");
+                    return;
+                }
+            }
+            "-h" | "--help" => {
+                println!("Usage: ms compile <file> [options]");
+                return;
+            }
+            _ => {
+                if options.input.is_empty() {
+                    options.input = arg.to_string();
+                } else {
+                    println!("Error: Invalid option '{}'", arg);
+                    return;
+                }
+            }
+        }
+    }
+
+    if options.output.is_empty() {
+        println!("Error: Missing output file");
+        return;
+    }
+
+    let source = std::fs::read_to_string(&options.input).expect("Failed to read file");
+
+    let code = if options.input.ends_with(".ms") {
+        todo!()
+    } else if options.input.ends_with(".msa") {
+        assemble(&source).expect("Failed to assemble code")
+    } else {
+        panic!("Unsupported file extension");
+    };
+
+    let bytecode = Instruction::code_to_bytes(&code);
+
+    std::fs::write(&options.output, &bytecode).expect("Failed to write file");
 }
 
 fn main() {
-    let code = vec![
-        Instruction::Version {
-            major: VERSION_MAJOR,
-            minor: VERSION_MINOR,
-            patch: VERSION_PATCH,
-        },
-        Instruction::Func {
-            // print Hy Bessie 4
-            name: "hi".to_string(),
-            code: vec![
-                Instruction::PushConstString {
-                    value: "Hi".to_string(),
-                },
-                Instruction::GetLocal { index: 0 },
-                Instruction::GetField { index: 0 },
-                Instruction::GetLocal { index: 0 },
-                Instruction::GetField { index: 1 },
-                Instruction::Call {
-                    module: "std".to_string(),
-                    function: "print".to_string(),
-                },
-                Instruction::Pop,
-            ],
-        },
-        Instruction::Func {
-            name: "main".to_string(),
-            code: vec![
-                Instruction::Allocate { fields: 2 }, // Cow { name: "Bessie", age: 4 }
-                Instruction::PushConstString {
-                    value: "Bessie".to_string(),
-                },
-                Instruction::SetField { index: 0 },
-                Instruction::PushConstInteger { value: 4 },
-                Instruction::SetField { index: 1 },
-                Instruction::Call {
-                    module: "main".to_string(),
-                    function: "hi".to_string(),
-                },
-                Instruction::Pop,
-            ],
-        },
-    ];
+    // Parse command line arguments
+    let args: Vec<String> = std::env::args().collect();
 
-    let code = Instruction::code_to_bytes(&code);
+    // Check if the user provided a file to run
+    if args.len() < 2 {
+        usage();
+        return;
+    }
 
-    let module = Module::try_from(code).expect("Failed to load module");
-
-    let mut vm = VirtualMachine::new();
-
-    vm.load_module("main", module);
-    vm.load_module("std", modules_std());
-
-    vm.call("main", "main", vec![]);
+    // Check if the user provided a valid subcommand
+    match args[1].as_str() {
+        "run" => {
+            run(args[2..].to_vec());
+        }
+        "compile" => {
+            compile(args[2..].to_vec());
+        }
+        _ => {
+            usage();
+            println!("Error: Invalid subcommand");
+            return;
+        }
+    }
 }

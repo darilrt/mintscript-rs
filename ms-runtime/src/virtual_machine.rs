@@ -35,7 +35,7 @@ impl<'a> VirtualMachine {
         self.modules.insert(name.to_string(), module);
     }
 
-    pub fn execute(&mut self, code: &'a Code) -> Value {
+    pub fn execute(&mut self, code: &'a Code) {
         self.call_break = false;
         self.call_continue = false;
         self.call_return = false;
@@ -56,13 +56,19 @@ impl<'a> VirtualMachine {
                 Instruction::Hi => {
                     println!("Hi!");
                 }
-                Instruction::Func { name: _, code: _ } => {
+                Instruction::Fn { name: _, code: _ } => {
                     panic!("Function call not allowed here");
                 }
-                Instruction::Call { module, function } => {
-                    let args = self.stack.split_off(0);
-                    let result = self.call(module, function, args);
-                    self.stack.push(result);
+                Instruction::Call {
+                    module,
+                    function,
+                    param_count,
+                } => {
+                    let args = self
+                        .stack
+                        .split_off(self.stack.len() - *param_count as usize);
+
+                    self.call(module, function, args);
                 }
                 Instruction::PushConstString { value } => {
                     self.stack.push(Value::String(value.clone()));
@@ -390,12 +396,7 @@ impl<'a> VirtualMachine {
                 }
                 Instruction::Return => {
                     self.call_return = true;
-
-                    if let Some(value) = self.stack.pop() {
-                        return value.clone();
-                    } else {
-                        return Value::Null;
-                    }
+                    return;
                 }
                 Instruction::If {
                     if_block,
@@ -442,11 +443,9 @@ impl<'a> VirtualMachine {
                 }
             }
         }
-
-        Value::Integer(0)
     }
 
-    pub fn call(&mut self, module: &str, name: &str, args: Vec<Value>) -> Value {
+    pub fn call(&mut self, module: &str, name: &str, args: Vec<Value>) {
         let module = self.modules.get(module).unwrap();
 
         if let Some(function) = module.get_function(name) {
@@ -454,16 +453,32 @@ impl<'a> VirtualMachine {
                 crate::Function::Code { name: _, code } => {
                     self.local_vars.push(args);
                     let code = code.clone();
-                    let result = self.execute(&code);
+                    self.execute(&code);
                     self.local_vars.pop();
-                    return result;
+                    return;
                 }
                 crate::Function::Native { name: _, function } => {
-                    return function(args);
+                    let res = function(args);
+
+                    if let Some(res) = res {
+                        self.stack.push(res);
+                    }
+
+                    return;
                 }
             }
         } else {
             panic!("Function not found");
         }
+    }
+
+    pub fn has_function(&self, module: &str, name: &str) -> bool {
+        if let Some(module) = self.modules.get(module) {
+            if let Some(_) = module.get_function(name) {
+                return true;
+            }
+        }
+
+        false
     }
 }
