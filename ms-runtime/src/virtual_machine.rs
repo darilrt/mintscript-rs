@@ -7,12 +7,13 @@ use std::{
 use crate::{
     instruction::{Code, Instruction},
     module::Module,
-    Object, Value,
+    DyModule, Object, Value,
 };
 
 pub struct VirtualMachine {
     stack: Vec<Value>,
     modules: HashMap<String, Module>,
+    dymodules: HashMap<String, DyModule>,
     local_vars: Vec<Vec<Value>>,
     call_break: bool,
     call_continue: bool,
@@ -24,6 +25,7 @@ impl<'a> VirtualMachine {
         VirtualMachine {
             stack: Vec::new(),
             modules: HashMap::new(),
+            dymodules: HashMap::new(),
             local_vars: Vec::new(),
             call_break: false,
             call_continue: false,
@@ -31,8 +33,12 @@ impl<'a> VirtualMachine {
         }
     }
 
-    pub fn load_module(&mut self, name: &str, module: Module) {
-        self.modules.insert(name.to_string(), module);
+    pub fn add_module(&mut self, module: Module) {
+        self.modules.insert(module.name.clone(), module);
+    }
+
+    pub fn add_dynamic_module(&mut self, module: DyModule) {
+        self.dymodules.insert(module.name.clone(), module);
     }
 
     pub fn execute(&mut self, code: &'a Code) {
@@ -394,6 +400,15 @@ impl<'a> VirtualMachine {
                         }
                     }
                 }
+                Instruction::Module { name: _, code: _ } => {
+                    panic!("Module call not allowed here");
+                }
+                Instruction::LoadModule { name: _, code: _ } => {
+                    panic!("LoadModule call not allowed here");
+                }
+                Instruction::GetFunction { name: _ } => {
+                    panic!("GetFunction call not allowed here");
+                }
                 Instruction::Return => {
                     self.call_return = true;
                     return;
@@ -446,27 +461,30 @@ impl<'a> VirtualMachine {
     }
 
     pub fn call(&mut self, module: &str, name: &str, args: Vec<Value>) {
-        let module = self.modules.get(module).unwrap();
+        let Some(module) = self.modules.get_mut(module) else {
+            let Some(dymodule) = self.dymodules.get(module) else {
+                panic!("Module \"{}\" not found", module);
+            };
 
-        if let Some(function) = module.get_function(name) {
-            match function {
-                crate::Function::Code { name: _, code } => {
-                    self.local_vars.push(args);
-                    let code = code.clone();
-                    self.execute(&code);
-                    self.local_vars.pop();
-                    return;
+            if let Some(function) = dymodule.fns.get(name) {
+                let result = function(args);
+
+                if let Some(result) = result {
+                    self.stack.push(result);
                 }
-                crate::Function::Native { name: _, function } => {
-                    let res = function(args);
 
-                    if let Some(res) = res {
-                        self.stack.push(res);
-                    }
-
-                    return;
-                }
+                return;
+            } else {
+                panic!("Function not found");
             }
+        };
+
+        if let Some(function) = module.get_function_mut(name) {
+            self.local_vars.push(args);
+            let code = function.code.clone();
+            self.execute(&code);
+            self.local_vars.pop();
+            return;
         } else {
             panic!("Function not found");
         }

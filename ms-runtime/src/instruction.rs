@@ -79,6 +79,21 @@ pub enum Instruction {
     Gt,
     Ge,
 
+    // Modules
+    Module {
+        name: String,
+        code: Code,
+    },
+
+    // Dynamic Module
+    LoadModule {
+        name: String,
+        code: Code,
+    },
+    GetFunction {
+        name: String,
+    },
+
     // Control flow
     Return,
     If {
@@ -247,6 +262,49 @@ impl<'a> Instruction {
                 ByteCode::Le => code.push(Instruction::Le),
                 ByteCode::Gt => code.push(Instruction::Gt),
                 ByteCode::Ge => code.push(Instruction::Ge),
+                ByteCode::Module => {
+                    let Some(lenght) = reader.read_u32() else {
+                        return Err("Expected module code length".to_string());
+                    };
+
+                    let Some(name) = reader.read_string() else {
+                        return Err("Expected module name".to_string());
+                    };
+
+                    let Some(module_code) = reader.read_bytes(lenght as usize) else {
+                        return Err("Expected module code".to_string());
+                    };
+
+                    code.push(Instruction::Module {
+                        name: name,
+                        code: Instruction::from_bytecode(&module_code)?,
+                    });
+                }
+                ByteCode::LoadModule => {
+                    let Some(lenght) = reader.read_u32() else {
+                        return Err("Expected module code length".to_string());
+                    };
+
+                    let Some(name) = reader.read_string() else {
+                        return Err("Expected module name".to_string());
+                    };
+
+                    let Some(module_code) = reader.read_bytes(lenght as usize) else {
+                        return Err("Expected module code".to_string());
+                    };
+
+                    code.push(Instruction::LoadModule {
+                        name: name,
+                        code: Instruction::from_bytecode(&module_code)?,
+                    });
+                }
+                ByteCode::GetFunction => {
+                    let Some(name) = reader.read_string() else {
+                        return Err("Expected function name".to_string());
+                    };
+
+                    code.push(Instruction::GetFunction { name: name });
+                }
                 ByteCode::Return => code.push(Instruction::Return),
                 ByteCode::If => {
                     let Some(lenght) = reader.read_u32() else {
@@ -391,6 +449,28 @@ impl<'a> Instruction {
             Instruction::Le => writer.write_byte(ByteCode::Le as u8),
             Instruction::Gt => writer.write_byte(ByteCode::Gt as u8),
             Instruction::Ge => writer.write_byte(ByteCode::Ge as u8),
+            Instruction::Module { name, code } => {
+                writer.write_byte(ByteCode::Module as u8);
+
+                let code_bytes = Instruction::code_to_bytes(code);
+
+                writer.write_u32(code_bytes.len() as u32);
+                writer.write_string(name);
+                writer.write_bytes(&code_bytes);
+            }
+            Instruction::LoadModule { name, code } => {
+                writer.write_byte(ByteCode::LoadModule as u8);
+
+                let code_bytes = Instruction::code_to_bytes(code);
+
+                writer.write_u32(code_bytes.len() as u32);
+                writer.write_string(name);
+                writer.write_bytes(&code_bytes);
+            }
+            Instruction::GetFunction { name } => {
+                writer.write_byte(ByteCode::GetFunction as u8);
+                writer.write_string(name);
+            }
             Instruction::Return => writer.write_byte(ByteCode::Return as u8),
             Instruction::If {
                 if_block,
@@ -606,6 +686,52 @@ impl<'a> Instruction {
                     "cmp.le" => Ok(Instruction::Le),
                     "cmp.gt" => Ok(Instruction::Gt),
                     "cmp.ge" => Ok(Instruction::Ge),
+                    "mod" => {
+                        let name = match it.next() {
+                            Some(SExpr::Atom(value)) => value,
+                            _ => return Err("Expected module name".to_string()),
+                        };
+
+                        let mut module_code = Vec::new();
+
+                        while let Some(value) = it.next() {
+                            let instruction = Instruction::from_sexpr(value)?;
+                            module_code.push(instruction);
+                        }
+
+                        Ok(Instruction::Module {
+                            name: name.to_string(),
+                            code: module_code,
+                        })
+                    }
+                    "mod.load" => {
+                        let name = match it.next() {
+                            Some(SExpr::Atom(value)) => value,
+                            _ => return Err("Expected module name".to_string()),
+                        };
+
+                        let mut module_code = Vec::new();
+
+                        while let Some(value) = it.next() {
+                            let instruction = Instruction::from_sexpr(value)?;
+                            module_code.push(instruction);
+                        }
+
+                        Ok(Instruction::LoadModule {
+                            name: name.to_string(),
+                            code: module_code,
+                        })
+                    }
+                    "fn.get" => {
+                        let name = match it.next() {
+                            Some(SExpr::Atom(value)) => value,
+                            _ => return Err("Expected function name".to_string()),
+                        };
+
+                        Ok(Instruction::GetFunction {
+                            name: name.to_string(),
+                        })
+                    }
                     "return" => Ok(Instruction::Return),
                     "if" => {
                         let mut if_block = Vec::new();

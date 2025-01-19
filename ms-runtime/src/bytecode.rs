@@ -47,6 +47,13 @@ pub enum ByteCode {
     Gt = 0x15, // Greater than
     Ge = 0x16, // Greater than or equal
 
+    // Modules
+    Module = 0x1B, // Define a module
+
+    // Dynamic Module
+    LoadModule = 0x19,  // Load a dynamic module
+    GetFunction = 0x1A, // Get a function from a dynamic module
+
     // Control flow
     Return = 0xFE,   // Return from the current function
     If = 0xFD,       // IF <block: [ByteCode]> END Execute a block of code conditionally
@@ -87,6 +94,9 @@ impl ByteCode {
             0x14 => Some(ByteCode::Le),
             0x15 => Some(ByteCode::Gt),
             0x16 => Some(ByteCode::Ge),
+            0x1B => Some(ByteCode::Module),
+            0x19 => Some(ByteCode::LoadModule),
+            0x1A => Some(ByteCode::GetFunction),
             0xFE => Some(ByteCode::Return),
             0xFD => Some(ByteCode::If),
             0xFC => Some(ByteCode::Else),

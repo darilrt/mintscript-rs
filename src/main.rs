@@ -75,11 +75,16 @@ fn run(args: Vec<String>) {
         panic!("Unsupported file extension");
     };
 
-    let main_module = ms_runtime::Module::try_from(code).expect("Failed to load module");
-
+    let mods = ms_runtime::load_modules(&code).expect("Failed to load modules");
     let mut vm = ms_runtime::VirtualMachine::new();
-    vm.load_module("std", ms_stdlib::get_module());
-    vm.load_module("main", main_module);
+
+    for module in mods.0 {
+        vm.add_module(module);
+    }
+
+    for module in mods.1 {
+        vm.add_dynamic_module(module);
+    }
 
     if !vm.has_function("main", "main") {
         println!("Error: Missing 'main' function in {}", options.input);
@@ -153,7 +158,9 @@ fn main() {
 
     // Check if the user provided a file to run
     if args.len() < 2 {
-        usage();
+        // usage();
+        // run test file
+        run(vec!["./examples/test.msa".to_string()]);
         return;
     }
 

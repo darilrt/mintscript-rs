@@ -4,11 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [workspace]
-members = ["ms-runtime", "ms-stdlib"]
+members = ["ms-runtime"]
 
 [dependencies]
 ms-runtime = { path = "ms-runtime" }
-ms-stdlib = { path = "ms-stdlib" }
 
 [[bin]]
 name = "ms"

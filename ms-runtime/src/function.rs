@@ -1,12 +1,6 @@
-use crate::{instruction::Code, Value};
+use crate::instruction::Code;
 
-pub enum Function {
-    Code {
-        name: String,
-        code: Code,
-    },
-    Native {
-        name: String,
-        function: Box<dyn Fn(Vec<Value>) -> Option<Value>>,
-    },
+pub struct Function {
+    pub name: String,
+    pub code: Code,
 }
