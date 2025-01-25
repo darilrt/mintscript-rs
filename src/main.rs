@@ -1,31 +1,14 @@
+mod options;
+
+use std::time::Instant;
+
 use ms_runtime::{asm::assemble, Instruction};
-
-// Print usage information
-// Usage: ms <subcommand>
-//   ms run <file> [options]
-//   ms compile <file> [options]
-fn usage() {
-    println!("Usage: ms <subcommand>");
-    println!("  ms run <file> [options]");
-    println!("  ms compile <file> [options]");
-}
-
-struct Options {
-    output: String,
-    input: String,
-}
-
-impl Options {
-    fn new() -> Options {
-        Options {
-            output: String::new(),
-            input: String::new(),
-        }
-    }
-}
+use options::Options;
 
 // run subcommand
 fn run(args: Vec<String>) {
+    let total_time = Instant::now();
+
     // Check if the user provided a file to run
     if args.len() == 0 {
         println!("Error: No input file");
@@ -40,8 +23,22 @@ fn run(args: Vec<String>) {
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "-h" | "--help" => {
-                println!("Usage: ms run <file>");
+                println!("Usage: ms run <file> [options]");
+                println!("Options:");
+                println!("  -entry <function>  Entry point function (default: main.main)");
+                println!("  -time              Print execution time");
                 return;
+            }
+            "-entry" => {
+                if let Some(entry) = it.next() {
+                    options.entry = entry.to_string();
+                } else {
+                    println!("Error: Missing entry point");
+                    return;
+                }
+            }
+            "-time" => {
+                options.time = true;
             }
             _ => {
                 if options.input.is_empty() {
@@ -63,6 +60,8 @@ fn run(args: Vec<String>) {
         return;
     }
 
+    let compile_time = Instant::now();
+
     let code = if options.input.ends_with(".ms") {
         todo!()
     } else if options.input.ends_with(".msa") {
@@ -75,6 +74,9 @@ fn run(args: Vec<String>) {
         panic!("Unsupported file extension");
     };
 
+    let compile_time = compile_time.elapsed();
+    let load_time = Instant::now();
+
     let mods = ms_runtime::load_modules(&code).expect("Failed to load modules");
     let mut vm = ms_runtime::VirtualMachine::new();
 
@@ -86,12 +88,34 @@ fn run(args: Vec<String>) {
         vm.add_dynamic_module(module);
     }
 
-    if !vm.has_function("main", "main") {
-        println!("Error: Missing 'main' function in {}", options.input);
+    // Get the entry point function from the options.entry string (get the last part of the string)
+    let parts: Vec<&str> = options.entry.split('.').collect();
+
+    if parts.len() < 2 {
+        println!("Error: Invalid entry point '{}'", options.entry);
         return;
     }
 
-    vm.call("main", "main", vec![]);
+    let function = parts.last().unwrap();
+    let module = parts[..parts.len() - 1].join(".");
+
+    if !vm.has_function(&module, function) {
+        println!("Error: Missing entry point '{}'", options.entry);
+        return;
+    }
+
+    let load_time = load_time.elapsed();
+
+    let execute_time = Instant::now();
+    vm.call(&module, function, vec![]);
+    let execute_time = execute_time.elapsed();
+
+    if options.time {
+        println!("Compile time: {:?}", compile_time);
+        println!("Load time: {:?}", load_time);
+        println!("Execute time: {:?}", execute_time);
+        println!("Total time: {:?}", total_time.elapsed());
+    }
 }
 
 // compile subcommand
@@ -158,9 +182,12 @@ fn main() {
 
     // Check if the user provided a file to run
     if args.len() < 2 {
-        // usage();
-        // run test file
-        run(vec!["./examples/test.msa".to_string()]);
+        println!("Usage: ms <subcommand>");
+        println!("Subcommands:");
+        println!("  run <file> [options]");
+        println!("  compile <file> [options]");
+        // Debugging
+        // run(vec!["./examples/test.msa".to_string()]);
         return;
     }
 
@@ -173,7 +200,6 @@ fn main() {
             compile(args[2..].to_vec());
         }
         _ => {
-            usage();
             println!("Error: Invalid subcommand");
             return;
         }

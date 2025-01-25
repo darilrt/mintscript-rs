@@ -38,6 +38,8 @@ pub enum ByteCode {
     Sub = 0x0E, // Subtract
     Mul = 0x0F, // Multiply
     Div = 0x10, // Divide
+    Inc = 0x1D, // Increment
+    Dec = 0x1E, // Decrement
 
     // Comparison
     Eq = 0x11, // Equal
@@ -53,10 +55,11 @@ pub enum ByteCode {
     // Dynamic Module
     LoadModule = 0x19,  // Load a dynamic module
     GetFunction = 0x1A, // Get a function from a dynamic module
+    Alias = 0x1C,       // Alias a function from a dynamic module
 
     // Control flow
     Return = 0xFE,   // Return from the current function
-    If = 0xFD,       // IF <block: [ByteCode]> END Execute a block of code conditionally
+    Then = 0xFD,     // THEN <block: [ByteCode]> END Execute a block of code conditionally
     Else = 0xFC, // IF <block: [ByteCode]> ELSE <block: [ByteCode]> END Execute a block of code conditionally
     Loop = 0xFB, // LOOP <block: [ByteCode]> END Execute a block of code in a loop until instructed to break
     Break = 0xFA, // BREAK Exit the current loop
@@ -88,6 +91,8 @@ impl ByteCode {
             0x0E => Some(ByteCode::Sub),
             0x0F => Some(ByteCode::Mul),
             0x10 => Some(ByteCode::Div),
+            0x1D => Some(ByteCode::Inc),
+            0x1E => Some(ByteCode::Dec),
             0x11 => Some(ByteCode::Eq),
             0x12 => Some(ByteCode::Ne),
             0x13 => Some(ByteCode::Lt),
@@ -97,8 +102,9 @@ impl ByteCode {
             0x1B => Some(ByteCode::Module),
             0x19 => Some(ByteCode::LoadModule),
             0x1A => Some(ByteCode::GetFunction),
+            0x1C => Some(ByteCode::Alias),
             0xFE => Some(ByteCode::Return),
-            0xFD => Some(ByteCode::If),
+            0xFD => Some(ByteCode::Then),
             0xFC => Some(ByteCode::Else),
             0xFB => Some(ByteCode::Loop),
             0xFA => Some(ByteCode::Break),

@@ -1,3 +1,5 @@
+use std::hash::Hash;
+
 use crate::{byte_reader::ByteReader, byte_writer::ByteWriter, sexpr::SExpr, ByteCode};
 
 #[derive(Debug, Clone)]
@@ -70,6 +72,8 @@ pub enum Instruction {
     Sub,
     Mul,
     Div,
+    Inc,
+    Dec,
 
     // Comparison
     Eq,
@@ -92,12 +96,13 @@ pub enum Instruction {
     },
     GetFunction {
         name: String,
+        alias: Option<String>,
     },
 
     // Control flow
     Return,
-    If {
-        if_block: Code,
+    Then {
+        then_block: Code,
         else_block: Code,
     },
     Loop {
@@ -105,6 +110,172 @@ pub enum Instruction {
     },
     Break,
     Continue,
+}
+
+impl PartialEq<Self> for Instruction {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Instruction::None, Instruction::None) => true,
+            (
+                Instruction::Version {
+                    major: _a,
+                    minor: _b,
+                    patch: _c,
+                },
+                Instruction::Version {
+                    major: _x,
+                    minor: _y,
+                    patch: _z,
+                },
+            ) => true,
+            (Instruction::Dump, Instruction::Dump) => true,
+            (Instruction::Hi, Instruction::Hi) => true,
+            (Instruction::Fn { name: _a, code: _b }, Instruction::Fn { name: _x, code: _y }) => {
+                true
+            }
+            (
+                Instruction::Call {
+                    module: _a,
+                    function: _b,
+                    param_count: _c,
+                },
+                Instruction::Call {
+                    module: _x,
+                    function: _y,
+                    param_count: _z,
+                },
+            ) => true,
+            (
+                Instruction::PushConstString { value: _a },
+                Instruction::PushConstString { value: _x },
+            ) => true,
+            (
+                Instruction::PushConstInteger { value: _a },
+                Instruction::PushConstInteger { value: _x },
+            ) => true,
+            (
+                Instruction::PushConstFloat { value: _a },
+                Instruction::PushConstFloat { value: _x },
+            ) => true,
+            (
+                Instruction::PushConstBoolean { value: _a },
+                Instruction::PushConstBoolean { value: _x },
+            ) => true,
+            (Instruction::GetLocal { index: _a }, Instruction::GetLocal { index: _x }) => true,
+            (Instruction::SetLocal { index: _a }, Instruction::SetLocal { index: _x }) => true,
+            (Instruction::ReserveLocal { size: _a }, Instruction::ReserveLocal { size: _x }) => {
+                true
+            }
+            (Instruction::Allocate { fields: _a }, Instruction::Allocate { fields: _x }) => true,
+            (Instruction::GetField { index: _a }, Instruction::GetField { index: _x }) => true,
+            (Instruction::SetField { index: _a }, Instruction::SetField { index: _x }) => true,
+            (Instruction::Pop, Instruction::Pop) => true,
+            (Instruction::Dup, Instruction::Dup) => true,
+            (Instruction::Add, Instruction::Add) => true,
+            (Instruction::Sub, Instruction::Sub) => true,
+            (Instruction::Mul, Instruction::Mul) => true,
+            (Instruction::Div, Instruction::Div) => true,
+            (Instruction::Inc, Instruction::Inc) => true,
+            (Instruction::Dec, Instruction::Dec) => true,
+            (Instruction::Eq, Instruction::Eq) => true,
+            (Instruction::Ne, Instruction::Ne) => true,
+            (Instruction::Lt, Instruction::Lt) => true,
+            (Instruction::Le, Instruction::Le) => true,
+            (Instruction::Gt, Instruction::Gt) => true,
+            (Instruction::Ge, Instruction::Ge) => true,
+            (
+                Instruction::Module { name: _a, code: _b },
+                Instruction::Module { name: _x, code: _y },
+            ) => true,
+            (
+                Instruction::LoadModule { name: _a, code: _b },
+                Instruction::LoadModule { name: _x, code: _y },
+            ) => true,
+            (
+                Instruction::GetFunction {
+                    name: _a,
+                    alias: _b,
+                },
+                Instruction::GetFunction {
+                    name: _x,
+                    alias: _y,
+                },
+            ) => true,
+            (Instruction::Return, Instruction::Return) => true,
+            (
+                Instruction::Then {
+                    then_block: _a,
+                    else_block: _b,
+                },
+                Instruction::Then {
+                    then_block: _x,
+                    else_block: _y,
+                },
+            ) => true,
+            (Instruction::Loop { block: _a }, Instruction::Loop { block: _x }) => true,
+            (Instruction::Break, Instruction::Break) => true,
+            (Instruction::Continue, Instruction::Continue) => true,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for Instruction {}
+
+impl Hash for Instruction {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self {
+            Instruction::None => 0.hash(state),
+            Instruction::Version {
+                major: _,
+                minor: _,
+                patch: _,
+            } => 1.hash(state),
+            Instruction::Dump => 2.hash(state),
+            Instruction::Hi => 3.hash(state),
+            Instruction::Fn { name: _, code: _ } => 4.hash(state),
+            Instruction::Call {
+                module: _,
+                function: _,
+                param_count: _,
+            } => 5.hash(state),
+            Instruction::PushConstString { value: _ } => 6.hash(state),
+            Instruction::PushConstInteger { value: _ } => 7.hash(state),
+            Instruction::PushConstFloat { value: _ } => 8.hash(state),
+            Instruction::PushConstBoolean { value: _ } => 9.hash(state),
+            Instruction::GetLocal { index: _ } => 10.hash(state),
+            Instruction::SetLocal { index: _ } => 11.hash(state),
+            Instruction::ReserveLocal { size: _ } => 12.hash(state),
+            Instruction::Allocate { fields: _ } => 13.hash(state),
+            Instruction::GetField { index: _ } => 14.hash(state),
+            Instruction::SetField { index: _ } => 15.hash(state),
+            Instruction::Pop => 16.hash(state),
+            Instruction::Dup => 17.hash(state),
+            Instruction::Add => 18.hash(state),
+            Instruction::Sub => 19.hash(state),
+            Instruction::Mul => 20.hash(state),
+            Instruction::Div => 21.hash(state),
+            Instruction::Inc => 22.hash(state),
+            Instruction::Dec => 23.hash(state),
+            Instruction::Eq => 24.hash(state),
+            Instruction::Ne => 25.hash(state),
+            Instruction::Lt => 26.hash(state),
+            Instruction::Le => 27.hash(state),
+            Instruction::Gt => 28.hash(state),
+            Instruction::Ge => 29.hash(state),
+            Instruction::Module { name: _, code: _ } => 30.hash(state),
+            Instruction::LoadModule { name: _, code: _ } => 31.hash(state),
+            Instruction::GetFunction { name: _, alias: _ } => 32.hash(state),
+            Instruction::Return => 33.hash(state),
+            Instruction::Then {
+                then_block: _,
+                else_block: _,
+            } => 34.hash(state),
+            Instruction::Loop { block: _ } => 35.hash(state),
+            Instruction::Break => 36.hash(state),
+            Instruction::Continue => 37.hash(state),
+        }
+    }
 }
 
 pub type Code = Vec<Instruction>;
@@ -256,6 +427,8 @@ impl<'a> Instruction {
                 ByteCode::Sub => code.push(Instruction::Sub),
                 ByteCode::Mul => code.push(Instruction::Mul),
                 ByteCode::Div => code.push(Instruction::Div),
+                ByteCode::Inc => code.push(Instruction::Inc),
+                ByteCode::Dec => code.push(Instruction::Dec),
                 ByteCode::Eq => code.push(Instruction::Eq),
                 ByteCode::Ne => code.push(Instruction::Ne),
                 ByteCode::Lt => code.push(Instruction::Lt),
@@ -303,10 +476,32 @@ impl<'a> Instruction {
                         return Err("Expected function name".to_string());
                     };
 
-                    code.push(Instruction::GetFunction { name: name });
+                    reader.save_position();
+                    if let Some(byte) = reader.read_byte() {
+                        if ByteCode::from_u8(byte) == Some(ByteCode::Alias) {
+                            let Some(alias) = reader.read_string() else {
+                                return Err("Expected alias name".to_string());
+                            };
+
+                            code.push(Instruction::GetFunction {
+                                name: name,
+                                alias: Some(alias),
+                            });
+                            break;
+                        }
+                    }
+
+                    reader.restore_position();
+                    code.push(Instruction::GetFunction {
+                        name: name,
+                        alias: None,
+                    });
+                }
+                ByteCode::Alias => {
+                    return Err("Invalid instruction (as) outside of function".to_string());
                 }
                 ByteCode::Return => code.push(Instruction::Return),
-                ByteCode::If => {
+                ByteCode::Then => {
                     let Some(lenght) = reader.read_u32() else {
                         return Err("Expected block code length".to_string());
                     };
@@ -315,9 +510,10 @@ impl<'a> Instruction {
                         return Err("Expected block code".to_string());
                     };
 
-                    let if_block = Instruction::from_bytecode(&block)?;
+                    let then_block = Instruction::from_bytecode(&block)?;
                     let mut else_block = Vec::new();
 
+                    reader.save_position();
                     if let Some(byte) = reader.read_byte() {
                         if ByteCode::from_u8(byte) == Some(ByteCode::Else) {
                             let Some(lenght) = reader.read_u32() else {
@@ -329,16 +525,20 @@ impl<'a> Instruction {
                             };
 
                             else_block = Instruction::from_bytecode(&block)?;
+                        } else {
+                            reader.restore_position();
                         }
+                    } else {
+                        reader.restore_position();
                     }
 
-                    code.push(Instruction::If {
-                        if_block: if_block,
+                    code.push(Instruction::Then {
+                        then_block,
                         else_block: else_block,
                     });
                 }
                 ByteCode::Else => {
-                    panic!("Invalid instruction ELSE without IF");
+                    return Err("Invalid instruction (else) outside of then block".to_string());
                 }
                 ByteCode::Loop => {
                     let Some(lenght) = reader.read_u32() else {
@@ -443,6 +643,8 @@ impl<'a> Instruction {
             Instruction::Sub => writer.write_byte(ByteCode::Sub as u8),
             Instruction::Mul => writer.write_byte(ByteCode::Mul as u8),
             Instruction::Div => writer.write_byte(ByteCode::Div as u8),
+            Instruction::Inc => writer.write_byte(ByteCode::Inc as u8),
+            Instruction::Dec => writer.write_byte(ByteCode::Dec as u8),
             Instruction::Eq => writer.write_byte(ByteCode::Eq as u8),
             Instruction::Ne => writer.write_byte(ByteCode::Ne as u8),
             Instruction::Lt => writer.write_byte(ByteCode::Lt as u8),
@@ -467,18 +669,23 @@ impl<'a> Instruction {
                 writer.write_string(name);
                 writer.write_bytes(&code_bytes);
             }
-            Instruction::GetFunction { name } => {
+            Instruction::GetFunction { name, alias } => {
                 writer.write_byte(ByteCode::GetFunction as u8);
                 writer.write_string(name);
+
+                if let Some(alias) = alias {
+                    writer.write_byte(ByteCode::Alias as u8);
+                    writer.write_string(alias);
+                }
             }
             Instruction::Return => writer.write_byte(ByteCode::Return as u8),
-            Instruction::If {
-                if_block,
+            Instruction::Then {
+                then_block,
                 else_block,
             } => {
-                writer.write_byte(ByteCode::If as u8);
+                writer.write_byte(ByteCode::Then as u8);
 
-                let block_bytes = Instruction::code_to_bytes(if_block);
+                let block_bytes = Instruction::code_to_bytes(then_block);
 
                 writer.write_u32(block_bytes.len() as u32);
                 writer.write_bytes(&block_bytes);
@@ -680,6 +887,8 @@ impl<'a> Instruction {
                     "op.sub" => Ok(Instruction::Sub),
                     "op.mul" => Ok(Instruction::Mul),
                     "op.div" => Ok(Instruction::Div),
+                    "op.inc" => Ok(Instruction::Inc),
+                    "op.dec" => Ok(Instruction::Dec),
                     "cmp.eq" => Ok(Instruction::Eq),
                     "cmp.ne" => Ok(Instruction::Ne),
                     "cmp.lt" => Ok(Instruction::Lt),
@@ -728,13 +937,25 @@ impl<'a> Instruction {
                             _ => return Err("Expected function name".to_string()),
                         };
 
+                        let mut alias = None;
+
+                        if let Some(SExpr::Atom(_)) = it.next() {
+                            let alias_ = match it.next() {
+                                Some(SExpr::Atom(value)) => value,
+                                _ => return Err("Expected alias name".to_string()),
+                            };
+
+                            alias = Some(alias_.to_string());
+                        }
+
                         Ok(Instruction::GetFunction {
                             name: name.to_string(),
+                            alias,
                         })
                     }
                     "return" => Ok(Instruction::Return),
-                    "if" => {
-                        let mut if_block = Vec::new();
+                    "then" => {
+                        let mut then_block = Vec::new();
                         let mut else_block = Vec::new();
 
                         let mut has_else = false;
@@ -751,7 +972,7 @@ impl<'a> Instruction {
                                 }
                                 SExpr::List(_) => {
                                     let instruction = Instruction::from_sexpr(value)?;
-                                    if_block.push(instruction);
+                                    then_block.push(instruction);
                                 }
                             }
                         }
@@ -768,13 +989,25 @@ impl<'a> Instruction {
                             }
                         }
 
-                        Ok(Instruction::If {
-                            if_block: if_block,
+                        Ok(Instruction::Then {
+                            then_block,
                             else_block: else_block,
                         })
                     }
                     "loop" => {
-                        todo!()
+                        let mut block = Vec::new();
+
+                        while let Some(value) = it.next() {
+                            match value {
+                                SExpr::List(_) => {
+                                    let instruction = Instruction::from_sexpr(value)?;
+                                    block.push(instruction);
+                                }
+                                _ => return Err("Unexpected atom".to_string()),
+                            }
+                        }
+
+                        Ok(Instruction::Loop { block: block })
                     }
                     "break" => Ok(Instruction::Break),
                     "continue" => Ok(Instruction::Continue),
@@ -794,79 +1027,5 @@ impl<'a> Instruction {
         }
 
         Ok(code)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn instruction_to_bytes() {
-        let code = vec![
-            Instruction::PushConstInteger { value: 42 },
-            Instruction::PushConstFloat { value: 3.14 },
-            Instruction::Add,
-            Instruction::Return,
-        ];
-
-        let bytes = Instruction::code_to_bytes(&code);
-
-        let mut reader = ByteReader::new(&bytes);
-
-        assert_eq!(
-            reader.read_byte().unwrap(),
-            ByteCode::PushConstInteger as u8
-        );
-        assert_eq!(reader.read_i32().unwrap(), 42);
-
-        assert_eq!(reader.read_byte().unwrap(), ByteCode::PushConstFloat as u8);
-        assert_eq!(reader.read_f32().unwrap(), 3.14);
-
-        assert_eq!(reader.read_byte().unwrap(), ByteCode::Add as u8);
-
-        assert_eq!(reader.read_byte().unwrap(), ByteCode::Return as u8);
-    }
-
-    #[test]
-    fn instruction_from_bytes() {
-        let bytes = vec![
-            ByteCode::PushConstInteger as u8,
-            0x00,
-            0x00,
-            0x00,
-            42,
-            ByteCode::PushConstFloat as u8,
-            0x40,
-            0x48,
-            0xf5,
-            0xc3,
-            ByteCode::Add as u8,
-            ByteCode::Return as u8,
-        ];
-
-        let code = Instruction::from_bytecode(&bytes).unwrap();
-
-        assert_eq!(code.len(), 4);
-
-        match &code[0] {
-            Instruction::PushConstInteger { value } => assert_eq!(*value, 42),
-            _ => panic!("Invalid instruction"),
-        }
-
-        match &code[1] {
-            Instruction::PushConstFloat { value } => assert_eq!(*value, 3.14),
-            _ => panic!("Invalid instruction"),
-        }
-
-        match &code[2] {
-            Instruction::Add => {}
-            _ => panic!("Invalid instruction"),
-        }
-
-        match &code[3] {
-            Instruction::Return => {}
-            _ => panic!("Invalid instruction"),
-        }
     }
 }

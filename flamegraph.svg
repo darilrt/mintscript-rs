@@ -1,0 +1,491 @@
+<?xml version="1.0" standalone="no"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd"><svg version="1.1" width="1200" height="806" onload="init(evt)" viewBox="0 0 1200 806" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:fg="http://github.com/jonhoo/inferno"><!--Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples.--><!--NOTES: --><defs><linearGradient id="background" y1="0" y2="1" x1="0" x2="0"><stop stop-color="#eeeeee" offset="5%"/><stop stop-color="#eeeeb0" offset="95%"/></linearGradient></defs><style type="text/css">
+text { font-family:monospace; font-size:12px }
+#title { text-anchor:middle; font-size:17px; }
+#matched { text-anchor:end; }
+#search { text-anchor:end; opacity:0.1; cursor:pointer; }
+#search:hover, #search.show { opacity:1; }
+#subtitle { text-anchor:middle; font-color:rgb(160,160,160); }
+#unzoom { cursor:pointer; }
+#frames > *:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+.hide { display:none; }
+.parent { opacity:0.5; }
+</style><script type="text/ecmascript"><![CDATA[
+        var nametype = 'Function:';
+        var fontsize = 12;
+        var fontwidth = 0.59;
+        var xpad = 10;
+        var inverted = false;
+        var searchcolor = 'rgb(230,0,230)';
+        var fluiddrawing = true;
+        var truncate_text_right = false;
+    ]]><![CDATA["use strict";
+var details, searchbtn, unzoombtn, matchedtxt, svg, searching, frames, known_font_width;
+function init(evt) {
+    details = document.getElementById("details").firstChild;
+    searchbtn = document.getElementById("search");
+    unzoombtn = document.getElementById("unzoom");
+    matchedtxt = document.getElementById("matched");
+    svg = document.getElementsByTagName("svg")[0];
+    frames = document.getElementById("frames");
+    known_font_width = get_monospace_width(frames);
+    total_samples = parseInt(frames.attributes.total_samples.value);
+    searching = 0;
+
+    // Use GET parameters to restore a flamegraph's state.
+    var restore_state = function() {
+        var params = get_params();
+        if (params.x && params.y)
+            zoom(find_group(document.querySelector('[*|x="' + params.x + '"][y="' + params.y + '"]')));
+        if (params.s)
+            search(params.s);
+    };
+
+    if (fluiddrawing) {
+        // Make width dynamic so the SVG fits its parent's width.
+        svg.removeAttribute("width");
+        // Edge requires us to have a viewBox that gets updated with size changes.
+        var isEdge = /Edge\/\d./i.test(navigator.userAgent);
+        if (!isEdge) {
+            svg.removeAttribute("viewBox");
+        }
+        var update_for_width_change = function() {
+            if (isEdge) {
+                svg.attributes.viewBox.value = "0 0 " + svg.width.baseVal.value + " " + svg.height.baseVal.value;
+            }
+
+            // Keep consistent padding on left and right of frames container.
+            frames.attributes.width.value = svg.width.baseVal.value - xpad * 2;
+
+            // Text truncation needs to be adjusted for the current width.
+            update_text_for_elements(frames.children);
+
+            // Keep search elements at a fixed distance from right edge.
+            var svgWidth = svg.width.baseVal.value;
+            searchbtn.attributes.x.value = svgWidth - xpad;
+            matchedtxt.attributes.x.value = svgWidth - xpad;
+        };
+        window.addEventListener('resize', function() {
+            update_for_width_change();
+        });
+        // This needs to be done asynchronously for Safari to work.
+        setTimeout(function() {
+            unzoom();
+            update_for_width_change();
+            restore_state();
+        }, 0);
+    } else {
+        restore_state();
+    }
+}
+// event listeners
+window.addEventListener("click", function(e) {
+    var target = find_group(e.target);
+    if (target) {
+        if (target.nodeName == "a") {
+            if (e.ctrlKey === false) return;
+            e.preventDefault();
+        }
+        if (target.classList.contains("parent")) unzoom();
+        zoom(target);
+
+        // set parameters for zoom state
+        var el = target.querySelector("rect");
+        if (el && el.attributes && el.attributes.y && el.attributes["fg:x"]) {
+            var params = get_params()
+            params.x = el.attributes["fg:x"].value;
+            params.y = el.attributes.y.value;
+            history.replaceState(null, null, parse_params(params));
+        }
+    }
+    else if (e.target.id == "unzoom") {
+        unzoom();
+
+        // remove zoom state
+        var params = get_params();
+        if (params.x) delete params.x;
+        if (params.y) delete params.y;
+        history.replaceState(null, null, parse_params(params));
+    }
+    else if (e.target.id == "search") search_prompt();
+}, false)
+// mouse-over for info
+// show
+window.addEventListener("mouseover", function(e) {
+    var target = find_group(e.target);
+    if (target) details.nodeValue = nametype + " " + g_to_text(target);
+}, false)
+// clear
+window.addEventListener("mouseout", function(e) {
+    var target = find_group(e.target);
+    if (target) details.nodeValue = ' ';
+}, false)
+// ctrl-F for search
+window.addEventListener("keydown",function (e) {
+    if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+        e.preventDefault();
+        search_prompt();
+    }
+}, false)
+// functions
+function get_params() {
+    var params = {};
+    var paramsarr = window.location.search.substr(1).split('&');
+    for (var i = 0; i < paramsarr.length; ++i) {
+        var tmp = paramsarr[i].split("=");
+        if (!tmp[0] || !tmp[1]) continue;
+        params[tmp[0]]  = decodeURIComponent(tmp[1]);
+    }
+    return params;
+}
+function parse_params(params) {
+    var uri = "?";
+    for (var key in params) {
+        uri += key + '=' + encodeURIComponent(params[key]) + '&';
+    }
+    if (uri.slice(-1) == "&")
+        uri = uri.substring(0, uri.length - 1);
+    if (uri == '?')
+        uri = window.location.href.split('?')[0];
+    return uri;
+}
+function find_child(node, selector) {
+    var children = node.querySelectorAll(selector);
+    if (children.length) return children[0];
+    return;
+}
+function find_group(node) {
+    var parent = node.parentElement;
+    if (!parent) return;
+    if (parent.id == "frames") return node;
+    return find_group(parent);
+}
+function orig_save(e, attr, val) {
+    if (e.attributes["fg:orig_" + attr] != undefined) return;
+    if (e.attributes[attr] == undefined) return;
+    if (val == undefined) val = e.attributes[attr].value;
+    e.setAttribute("fg:orig_" + attr, val);
+}
+function orig_load(e, attr) {
+    if (e.attributes["fg:orig_"+attr] == undefined) return;
+    e.attributes[attr].value = e.attributes["fg:orig_" + attr].value;
+    e.removeAttribute("fg:orig_" + attr);
+}
+function g_to_text(e) {
+    var text = find_child(e, "title").firstChild.nodeValue;
+    return (text)
+}
+function g_to_func(e) {
+    var func = g_to_text(e);
+    // if there's any manipulation we want to do to the function
+    // name before it's searched, do it here before returning.
+    return (func);
+}
+function get_monospace_width(frames) {
+    // Given the id="frames" element, return the width of text characters if
+    // this is a monospace font, otherwise return 0.
+    text = find_child(frames.children[0], "text");
+    originalContent = text.textContent;
+    text.textContent = "!";
+    bangWidth = text.getComputedTextLength();
+    text.textContent = "W";
+    wWidth = text.getComputedTextLength();
+    text.textContent = originalContent;
+    if (bangWidth === wWidth) {
+        return bangWidth;
+    } else {
+        return 0;
+    }
+}
+function update_text_for_elements(elements) {
+    // In order to render quickly in the browser, you want to do one pass of
+    // reading attributes, and one pass of mutating attributes. See
+    // https://web.dev/avoid-large-complex-layouts-and-layout-thrashing/ for details.
+
+    // Fall back to inefficient calculation, if we're variable-width font.
+    // TODO This should be optimized somehow too.
+    if (known_font_width === 0) {
+        for (var i = 0; i < elements.length; i++) {
+            update_text(elements[i]);
+        }
+        return;
+    }
+
+    var textElemNewAttributes = [];
+    for (var i = 0; i < elements.length; i++) {
+        var e = elements[i];
+        var r = find_child(e, "rect");
+        var t = find_child(e, "text");
+        var w = parseFloat(r.attributes.width.value) * frames.attributes.width.value / 100 - 3;
+        var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+        var newX = format_percent((parseFloat(r.attributes.x.value) + (100 * 3 / frames.attributes.width.value)));
+
+        // Smaller than this size won't fit anything
+        if (w < 2 * known_font_width) {
+            textElemNewAttributes.push([newX, ""]);
+            continue;
+        }
+
+        // Fit in full text width
+        if (txt.length * known_font_width < w) {
+            textElemNewAttributes.push([newX, txt]);
+            continue;
+        }
+
+        var substringLength = Math.floor(w / known_font_width) - 2;
+        if (truncate_text_right) {
+            // Truncate the right side of the text.
+            textElemNewAttributes.push([newX, txt.substring(0, substringLength) + ".."]);
+            continue;
+        } else {
+            // Truncate the left side of the text.
+            textElemNewAttributes.push([newX, ".." + txt.substring(txt.length - substringLength, txt.length)]);
+            continue;
+        }
+    }
+
+    console.assert(textElemNewAttributes.length === elements.length, "Resize failed, please file a bug at https://github.com/jonhoo/inferno/");
+
+    // Now that we know new textContent, set it all in one go so we don't refresh a bazillion times.
+    for (var i = 0; i < elements.length; i++) {
+        var e = elements[i];
+        var values = textElemNewAttributes[i];
+        var t = find_child(e, "text");
+        t.attributes.x.value = values[0];
+        t.textContent = values[1];
+    }
+}
+
+function update_text(e) {
+    var r = find_child(e, "rect");
+    var t = find_child(e, "text");
+    var w = parseFloat(r.attributes.width.value) * frames.attributes.width.value / 100 - 3;
+    var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+    t.attributes.x.value = format_percent((parseFloat(r.attributes.x.value) + (100 * 3 / frames.attributes.width.value)));
+
+    // Smaller than this size won't fit anything
+    if (w < 2 * fontsize * fontwidth) {
+        t.textContent = "";
+        return;
+    }
+    t.textContent = txt;
+    // Fit in full text width
+    if (t.getComputedTextLength() < w)
+        return;
+    if (truncate_text_right) {
+        // Truncate the right side of the text.
+        for (var x = txt.length - 2; x > 0; x--) {
+            if (t.getSubStringLength(0, x + 2) <= w) {
+                t.textContent = txt.substring(0, x) + "..";
+                return;
+            }
+        }
+    } else {
+        // Truncate the left side of the text.
+        for (var x = 2; x < txt.length; x++) {
+            if (t.getSubStringLength(x - 2, txt.length) <= w) {
+                t.textContent = ".." + txt.substring(x, txt.length);
+                return;
+            }
+        }
+    }
+    t.textContent = "";
+}
+// zoom
+function zoom_reset(e) {
+    if (e.tagName == "rect") {
+        e.attributes.x.value = format_percent(100 * parseInt(e.attributes["fg:x"].value) / total_samples);
+        e.attributes.width.value = format_percent(100 * parseInt(e.attributes["fg:w"].value) / total_samples);
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_reset(c[i]);
+    }
+}
+function zoom_child(e, x, zoomed_width_samples) {
+    if (e.tagName == "text") {
+        var parent_x = parseFloat(find_child(e.parentNode, "rect[x]").attributes.x.value);
+        e.attributes.x.value = format_percent(parent_x + (100 * 3 / frames.attributes.width.value));
+    } else if (e.tagName == "rect") {
+        e.attributes.x.value = format_percent(100 * (parseInt(e.attributes["fg:x"].value) - x) / zoomed_width_samples);
+        e.attributes.width.value = format_percent(100 * parseInt(e.attributes["fg:w"].value) / zoomed_width_samples);
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_child(c[i], x, zoomed_width_samples);
+    }
+}
+function zoom_parent(e) {
+    if (e.attributes) {
+        if (e.attributes.x != undefined) {
+            e.attributes.x.value = "0.0%";
+        }
+        if (e.attributes.width != undefined) {
+            e.attributes.width.value = "100.0%";
+        }
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_parent(c[i]);
+    }
+}
+function zoom(node) {
+    var attr = find_child(node, "rect").attributes;
+    var width = parseInt(attr["fg:w"].value);
+    var xmin = parseInt(attr["fg:x"].value);
+    var xmax = xmin + width;
+    var ymin = parseFloat(attr.y.value);
+    unzoombtn.classList.remove("hide");
+    var el = frames.children;
+    var to_update_text = [];
+    for (var i = 0; i < el.length; i++) {
+        var e = el[i];
+        var a = find_child(e, "rect").attributes;
+        var ex = parseInt(a["fg:x"].value);
+        var ew = parseInt(a["fg:w"].value);
+        // Is it an ancestor
+        if (!inverted) {
+            var upstack = parseFloat(a.y.value) > ymin;
+        } else {
+            var upstack = parseFloat(a.y.value) < ymin;
+        }
+        if (upstack) {
+            // Direct ancestor
+            if (ex <= xmin && (ex+ew) >= xmax) {
+                e.classList.add("parent");
+                zoom_parent(e);
+                to_update_text.push(e);
+            }
+            // not in current path
+            else
+                e.classList.add("hide");
+        }
+        // Children maybe
+        else {
+            // no common path
+            if (ex < xmin || ex >= xmax) {
+                e.classList.add("hide");
+            }
+            else {
+                zoom_child(e, xmin, width);
+                to_update_text.push(e);
+            }
+        }
+    }
+    update_text_for_elements(to_update_text);
+}
+function unzoom() {
+    unzoombtn.classList.add("hide");
+    var el = frames.children;
+    for(var i = 0; i < el.length; i++) {
+        el[i].classList.remove("parent");
+        el[i].classList.remove("hide");
+        zoom_reset(el[i]);
+    }
+    update_text_for_elements(el);
+}
+// search
+function reset_search() {
+    var el = document.querySelectorAll("#frames rect");
+    for (var i = 0; i < el.length; i++) {
+        orig_load(el[i], "fill")
+    }
+    var params = get_params();
+    delete params.s;
+    history.replaceState(null, null, parse_params(params));
+}
+function search_prompt() {
+    if (!searching) {
+        var term = prompt("Enter a search term (regexp " +
+            "allowed, eg: ^ext4_)", "");
+        if (term != null) {
+            search(term)
+        }
+    } else {
+        reset_search();
+        searching = 0;
+        searchbtn.classList.remove("show");
+        searchbtn.firstChild.nodeValue = "Search"
+        matchedtxt.classList.add("hide");
+        matchedtxt.firstChild.nodeValue = ""
+    }
+}
+function search(term) {
+    var re = new RegExp(term);
+    var el = frames.children;
+    var matches = new Object();
+    var maxwidth = 0;
+    for (var i = 0; i < el.length; i++) {
+        var e = el[i];
+        // Skip over frames which are either not visible, or below the zoomed-to frame
+        if (e.classList.contains("hide") || e.classList.contains("parent")) {
+            continue;
+        }
+        var func = g_to_func(e);
+        var rect = find_child(e, "rect");
+        if (func == null || rect == null)
+            continue;
+        // Save max width. Only works as we have a root frame
+        var w = parseInt(rect.attributes["fg:w"].value);
+        if (w > maxwidth)
+            maxwidth = w;
+        if (func.match(re)) {
+            // highlight
+            var x = parseInt(rect.attributes["fg:x"].value);
+            orig_save(rect, "fill");
+            rect.attributes.fill.value = searchcolor;
+            // remember matches
+            if (matches[x] == undefined) {
+                matches[x] = w;
+            } else {
+                if (w > matches[x]) {
+                    // overwrite with parent
+                    matches[x] = w;
+                }
+            }
+            searching = 1;
+        }
+    }
+    if (!searching)
+        return;
+    var params = get_params();
+    params.s = term;
+    history.replaceState(null, null, parse_params(params));
+
+    searchbtn.classList.add("show");
+    searchbtn.firstChild.nodeValue = "Reset Search";
+    // calculate percent matched, excluding vertical overlap
+    var count = 0;
+    var lastx = -1;
+    var lastw = 0;
+    var keys = Array();
+    for (k in matches) {
+        if (matches.hasOwnProperty(k))
+            keys.push(k);
+    }
+    // sort the matched frames by their x location
+    // ascending, then width descending
+    keys.sort(function(a, b){
+        return a - b;
+    });
+    // Step through frames saving only the biggest bottom-up frames
+    // thanks to the sort order. This relies on the tree property
+    // where children are always smaller than their parents.
+    for (var k in keys) {
+        var x = parseInt(keys[k]);
+        var w = matches[keys[k]];
+        if (x >= lastx + lastw) {
+            count += w;
+            lastx = x;
+            lastw = w;
+        }
+    }
+    // display matched percent
+    matchedtxt.classList.remove("hide");
+    var pct = 100 * count / maxwidth;
+    if (pct != 100) pct = pct.toFixed(1);
+    matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+}
+function format_percent(n) {
+    return n.toFixed(4) + "%";
+}
+]]></script><rect x="0" y="0" width="100%" height="806" fill="url(#background)"/><text id="title" fill="rgb(0,0,0)" x="50.0000%" y="24.00">Flame Graph</text><text id="details" fill="rgb(0,0,0)" x="10" y="789.00"> </text><text id="unzoom" class="hide" fill="rgb(0,0,0)" x="10" y="24.00">Reset Zoom</text><text id="search" fill="rgb(0,0,0)" x="1190" y="24.00">Search</text><text id="matched" fill="rgb(0,0,0)" x="1190" y="789.00"> </text><svg id="frames" x="10" width="1180" total_samples="4588"><g><title>`0x7FFE5210AF10 (4 samples, 0.09%)</title><rect x="0.0000%" y="741" width="0.0872%" height="15" fill="rgb(227,0,7)" fg:x="0" fg:w="4"/><text x="0.2500%" y="751.50"></text></g><g><title>`0x7FFE521127D8 (1 samples, 0.02%)</title><rect x="0.0872%" y="693" width="0.0218%" height="15" fill="rgb(217,0,24)" fg:x="4" fg:w="1"/><text x="0.3372%" y="703.50"></text></g><g><title>`0x7FFE520FEC12 (1 samples, 0.02%)</title><rect x="0.0872%" y="677" width="0.0218%" height="15" fill="rgb(221,193,54)" fg:x="4" fg:w="1"/><text x="0.3372%" y="687.50"></text></g><g><title>`0x7FFE520E53D6 (1 samples, 0.02%)</title><rect x="0.0872%" y="661" width="0.0218%" height="15" fill="rgb(248,212,6)" fg:x="4" fg:w="1"/><text x="0.3372%" y="671.50"></text></g><g><title>`0x7FFE52153314 (1 samples, 0.02%)</title><rect x="0.0872%" y="645" width="0.0218%" height="15" fill="rgb(208,68,35)" fg:x="4" fg:w="1"/><text x="0.3372%" y="655.50"></text></g><g><title>`0x7FFE520D4147 (1 samples, 0.02%)</title><rect x="0.1090%" y="645" width="0.0218%" height="15" fill="rgb(232,128,0)" fg:x="5" fg:w="1"/><text x="0.3590%" y="655.50"></text></g><g><title>`0x7FFE520D4156 (2 samples, 0.04%)</title><rect x="0.1308%" y="645" width="0.0436%" height="15" fill="rgb(207,160,47)" fg:x="6" fg:w="2"/><text x="0.3808%" y="655.50"></text></g><g><title>`0x7FFE520C12AB (4 samples, 0.09%)</title><rect x="0.1090%" y="661" width="0.0872%" height="15" fill="rgb(228,23,34)" fg:x="5" fg:w="4"/><text x="0.3590%" y="671.50"></text></g><g><title>`0x7FFE520D41A8 (1 samples, 0.02%)</title><rect x="0.1744%" y="645" width="0.0218%" height="15" fill="rgb(218,30,26)" fg:x="8" fg:w="1"/><text x="0.4244%" y="655.50"></text></g><g><title>`0x7FFE520C0A7C (1 samples, 0.02%)</title><rect x="0.1962%" y="629" width="0.0218%" height="15" fill="rgb(220,122,19)" fg:x="9" fg:w="1"/><text x="0.4462%" y="639.50"></text></g><g><title>`0x7FFE52150A04 (1 samples, 0.02%)</title><rect x="0.1962%" y="613" width="0.0218%" height="15" fill="rgb(250,228,42)" fg:x="9" fg:w="1"/><text x="0.4462%" y="623.50"></text></g><g><title>`0x7FFE520E5E76 (7 samples, 0.15%)</title><rect x="0.0872%" y="709" width="0.1526%" height="15" fill="rgb(240,193,28)" fg:x="4" fg:w="7"/><text x="0.3372%" y="719.50"></text></g><g><title>`0x7FFE521128AA (6 samples, 0.13%)</title><rect x="0.1090%" y="693" width="0.1308%" height="15" fill="rgb(216,20,37)" fg:x="5" fg:w="6"/><text x="0.3590%" y="703.50"></text></g><g><title>`0x7FFE520C11EB (6 samples, 0.13%)</title><rect x="0.1090%" y="677" width="0.1308%" height="15" fill="rgb(206,188,39)" fg:x="5" fg:w="6"/><text x="0.3590%" y="687.50"></text></g><g><title>`0x7FFE520C13B0 (2 samples, 0.04%)</title><rect x="0.1962%" y="661" width="0.0436%" height="15" fill="rgb(217,207,13)" fg:x="9" fg:w="2"/><text x="0.4462%" y="671.50"></text></g><g><title>`0x7FFE520C0FE8 (2 samples, 0.04%)</title><rect x="0.1962%" y="645" width="0.0436%" height="15" fill="rgb(231,73,38)" fg:x="9" fg:w="2"/><text x="0.4462%" y="655.50"></text></g><g><title>`0x7FFE520C0B2F (1 samples, 0.02%)</title><rect x="0.2180%" y="629" width="0.0218%" height="15" fill="rgb(225,20,46)" fg:x="10" fg:w="1"/><text x="0.4680%" y="639.50"></text></g><g><title>`0x7FFE520DC8E8 (1 samples, 0.02%)</title><rect x="0.2180%" y="613" width="0.0218%" height="15" fill="rgb(210,31,41)" fg:x="10" fg:w="1"/><text x="0.4680%" y="623.50"></text></g><g><title>`0x7FFE520D4C39 (1 samples, 0.02%)</title><rect x="0.2180%" y="597" width="0.0218%" height="15" fill="rgb(221,200,47)" fg:x="10" fg:w="1"/><text x="0.4680%" y="607.50"></text></g><g><title>`0x7FFE5212351F (1 samples, 0.02%)</title><rect x="0.2180%" y="581" width="0.0218%" height="15" fill="rgb(226,26,5)" fg:x="10" fg:w="1"/><text x="0.4680%" y="591.50"></text></g><g><title>`0x7FFE520E5234 (1 samples, 0.02%)</title><rect x="0.2180%" y="565" width="0.0218%" height="15" fill="rgb(249,33,26)" fg:x="10" fg:w="1"/><text x="0.4680%" y="575.50"></text></g><g><title>`0x7FFE520E53D6 (1 samples, 0.02%)</title><rect x="0.2180%" y="549" width="0.0218%" height="15" fill="rgb(235,183,28)" fg:x="10" fg:w="1"/><text x="0.4680%" y="559.50"></text></g><g><title>`0x7FFE52153314 (1 samples, 0.02%)</title><rect x="0.2180%" y="533" width="0.0218%" height="15" fill="rgb(221,5,38)" fg:x="10" fg:w="1"/><text x="0.4680%" y="543.50"></text></g><g><title>`0x7FFE520DC744 (1 samples, 0.02%)</title><rect x="0.2398%" y="517" width="0.0218%" height="15" fill="rgb(247,18,42)" fg:x="11" fg:w="1"/><text x="0.4898%" y="527.50"></text></g><g><title>`0x7FFE520DC5BA (1 samples, 0.02%)</title><rect x="0.2398%" y="501" width="0.0218%" height="15" fill="rgb(241,131,45)" fg:x="11" fg:w="1"/><text x="0.4898%" y="511.50"></text></g><g><title>`0x7FFE520DC9BC (1 samples, 0.02%)</title><rect x="0.2398%" y="485" width="0.0218%" height="15" fill="rgb(249,31,29)" fg:x="11" fg:w="1"/><text x="0.4898%" y="495.50"></text></g><g><title>`0x7FFE521508A4 (1 samples, 0.02%)</title><rect x="0.2398%" y="469" width="0.0218%" height="15" fill="rgb(225,111,53)" fg:x="11" fg:w="1"/><text x="0.4898%" y="479.50"></text></g><g><title>`0x7FFE520C0B2F (2 samples, 0.04%)</title><rect x="0.2398%" y="533" width="0.0436%" height="15" fill="rgb(238,160,17)" fg:x="11" fg:w="2"/><text x="0.4898%" y="543.50"></text></g><g><title>`0x7FFE520DC8E8 (1 samples, 0.02%)</title><rect x="0.2616%" y="517" width="0.0218%" height="15" fill="rgb(214,148,48)" fg:x="12" fg:w="1"/><text x="0.5116%" y="527.50"></text></g><g><title>`0x7FFE520D4BAB (1 samples, 0.02%)</title><rect x="0.2616%" y="501" width="0.0218%" height="15" fill="rgb(232,36,49)" fg:x="12" fg:w="1"/><text x="0.5116%" y="511.50"></text></g><g><title>`0x7FFE520D4DF6 (1 samples, 0.02%)</title><rect x="0.2616%" y="485" width="0.0218%" height="15" fill="rgb(209,103,24)" fg:x="12" fg:w="1"/><text x="0.5116%" y="495.50"></text></g><g><title>`0x7FFE520D5DB4 (1 samples, 0.02%)</title><rect x="0.2616%" y="469" width="0.0218%" height="15" fill="rgb(229,88,8)" fg:x="12" fg:w="1"/><text x="0.5116%" y="479.50"></text></g><g><title>`0x7FFE520DD319 (1 samples, 0.02%)</title><rect x="0.2616%" y="453" width="0.0218%" height="15" fill="rgb(213,181,19)" fg:x="12" fg:w="1"/><text x="0.5116%" y="463.50"></text></g><g><title>`0x7FFE520DC8E8 (1 samples, 0.02%)</title><rect x="0.2616%" y="437" width="0.0218%" height="15" fill="rgb(254,191,54)" fg:x="12" fg:w="1"/><text x="0.5116%" y="447.50"></text></g><g><title>`0x7FFE520D4A1F (1 samples, 0.02%)</title><rect x="0.2616%" y="421" width="0.0218%" height="15" fill="rgb(241,83,37)" fg:x="12" fg:w="1"/><text x="0.5116%" y="431.50"></text></g><g><title>`0x7FFE52121B5C (1 samples, 0.02%)</title><rect x="0.2616%" y="405" width="0.0218%" height="15" fill="rgb(233,36,39)" fg:x="12" fg:w="1"/><text x="0.5116%" y="415.50"></text></g><g><title>`0x7FFE50801044 (1 samples, 0.02%)</title><rect x="0.2616%" y="389" width="0.0218%" height="15" fill="rgb(226,3,54)" fg:x="12" fg:w="1"/><text x="0.5116%" y="399.50"></text></g><g><title>`0x7FFE520B51C9 (1 samples, 0.02%)</title><rect x="0.2616%" y="373" width="0.0218%" height="15" fill="rgb(245,192,40)" fg:x="12" fg:w="1"/><text x="0.5116%" y="383.50"></text></g><g><title>`0x7FFE520B5604 (1 samples, 0.02%)</title><rect x="0.2616%" y="357" width="0.0218%" height="15" fill="rgb(238,167,29)" fg:x="12" fg:w="1"/><text x="0.5116%" y="367.50"></text></g><g><title>`0x7FFE520D2793 (1 samples, 0.02%)</title><rect x="0.2616%" y="341" width="0.0218%" height="15" fill="rgb(232,182,51)" fg:x="12" fg:w="1"/><text x="0.5116%" y="351.50"></text></g><g><title>`0x7FFE520D6EED (1 samples, 0.02%)</title><rect x="0.2616%" y="325" width="0.0218%" height="15" fill="rgb(231,60,39)" fg:x="12" fg:w="1"/><text x="0.5116%" y="335.50"></text></g><g><title>`0x7FFE5214EBB1 (1 samples, 0.02%)</title><rect x="0.2616%" y="309" width="0.0218%" height="15" fill="rgb(208,69,12)" fg:x="12" fg:w="1"/><text x="0.5116%" y="319.50"></text></g><g><title>`0x7FFE520D8DC4 (3 samples, 0.07%)</title><rect x="0.2398%" y="581" width="0.0654%" height="15" fill="rgb(235,93,37)" fg:x="11" fg:w="3"/><text x="0.4898%" y="591.50"></text></g><g><title>`0x7FFE520C12DF (3 samples, 0.07%)</title><rect x="0.2398%" y="565" width="0.0654%" height="15" fill="rgb(213,116,39)" fg:x="11" fg:w="3"/><text x="0.4898%" y="575.50"></text></g><g><title>`0x7FFE520C1510 (3 samples, 0.07%)</title><rect x="0.2398%" y="549" width="0.0654%" height="15" fill="rgb(222,207,29)" fg:x="11" fg:w="3"/><text x="0.4898%" y="559.50"></text></g><g><title>`0x7FFE520C0B4D (1 samples, 0.02%)</title><rect x="0.2833%" y="533" width="0.0218%" height="15" fill="rgb(206,96,30)" fg:x="13" fg:w="1"/><text x="0.5333%" y="543.50"></text></g><g><title>`0x7FFE52150584 (1 samples, 0.02%)</title><rect x="0.2833%" y="517" width="0.0218%" height="15" fill="rgb(218,138,4)" fg:x="13" fg:w="1"/><text x="0.5333%" y="527.50"></text></g><g><title>`0x7FFE4FBCC099 (4 samples, 0.09%)</title><rect x="0.2398%" y="693" width="0.0872%" height="15" fill="rgb(250,191,14)" fg:x="11" fg:w="4"/><text x="0.4898%" y="703.50"></text></g><g><title>`0x7FFE4FBCBEA8 (4 samples, 0.09%)</title><rect x="0.2398%" y="677" width="0.0872%" height="15" fill="rgb(239,60,40)" fg:x="11" fg:w="4"/><text x="0.4898%" y="687.50"></text></g><g><title>`0x7FFE4FBD8FB1 (4 samples, 0.09%)</title><rect x="0.2398%" y="661" width="0.0872%" height="15" fill="rgb(206,27,48)" fg:x="11" fg:w="4"/><text x="0.4898%" y="671.50"></text></g><g><title>`0x7FFE4FBD1C03 (4 samples, 0.09%)</title><rect x="0.2398%" y="645" width="0.0872%" height="15" fill="rgb(225,35,8)" fg:x="11" fg:w="4"/><text x="0.4898%" y="655.50"></text></g><g><title>`0x7FFE4F41B732 (4 samples, 0.09%)</title><rect x="0.2398%" y="629" width="0.0872%" height="15" fill="rgb(250,213,24)" fg:x="11" fg:w="4"/><text x="0.4898%" y="639.50"></text></g><g><title>`0x7FFE520DA74A (4 samples, 0.09%)</title><rect x="0.2398%" y="613" width="0.0872%" height="15" fill="rgb(247,123,22)" fg:x="11" fg:w="4"/><text x="0.4898%" y="623.50"></text></g><g><title>`0x7FFE520C90CC (4 samples, 0.09%)</title><rect x="0.2398%" y="597" width="0.0872%" height="15" fill="rgb(231,138,38)" fg:x="11" fg:w="4"/><text x="0.4898%" y="607.50"></text></g><g><title>`0x7FFE520D8E30 (1 samples, 0.02%)</title><rect x="0.3051%" y="581" width="0.0218%" height="15" fill="rgb(231,145,46)" fg:x="14" fg:w="1"/><text x="0.5551%" y="591.50"></text></g><g><title>`0x7FFE520DDB1D (1 samples, 0.02%)</title><rect x="0.3051%" y="565" width="0.0218%" height="15" fill="rgb(251,118,11)" fg:x="14" fg:w="1"/><text x="0.5551%" y="575.50"></text></g><g><title>`0x7FFE5211D460 (1 samples, 0.02%)</title><rect x="0.3051%" y="549" width="0.0218%" height="15" fill="rgb(217,147,25)" fg:x="14" fg:w="1"/><text x="0.5551%" y="559.50"></text></g><g><title>`0x7FFE5211D3EE (1 samples, 0.02%)</title><rect x="0.3051%" y="533" width="0.0218%" height="15" fill="rgb(247,81,37)" fg:x="14" fg:w="1"/><text x="0.5551%" y="543.50"></text></g><g><title>`0x7FFE5211D63D (1 samples, 0.02%)</title><rect x="0.3051%" y="517" width="0.0218%" height="15" fill="rgb(209,12,38)" fg:x="14" fg:w="1"/><text x="0.5551%" y="527.50"></text></g><g><title>`0x7FFE520D8B8F (1 samples, 0.02%)</title><rect x="0.3051%" y="501" width="0.0218%" height="15" fill="rgb(227,1,9)" fg:x="14" fg:w="1"/><text x="0.5551%" y="511.50"></text></g><g><title>`0x7FFE51637C3F (1 samples, 0.02%)</title><rect x="0.3051%" y="485" width="0.0218%" height="15" fill="rgb(248,47,43)" fg:x="14" fg:w="1"/><text x="0.5551%" y="495.50"></text></g><g><title>`0x7FFE5166D8D5 (1 samples, 0.02%)</title><rect x="0.3051%" y="469" width="0.0218%" height="15" fill="rgb(221,10,30)" fg:x="14" fg:w="1"/><text x="0.5551%" y="479.50"></text></g><g><title>`0x7FFE51699FB0 (1 samples, 0.02%)</title><rect x="0.3051%" y="453" width="0.0218%" height="15" fill="rgb(210,229,1)" fg:x="14" fg:w="1"/><text x="0.5551%" y="463.50"></text></g><g><title>`0x7FFE520DD3B2 (1 samples, 0.02%)</title><rect x="0.3269%" y="245" width="0.0218%" height="15" fill="rgb(222,148,37)" fg:x="15" fg:w="1"/><text x="0.5769%" y="255.50"></text></g><g><title>`0x7FFE520D2549 (1 samples, 0.02%)</title><rect x="0.3269%" y="229" width="0.0218%" height="15" fill="rgb(234,67,33)" fg:x="15" fg:w="1"/><text x="0.5769%" y="239.50"></text></g><g><title>`0x7FFE52123C50 (1 samples, 0.02%)</title><rect x="0.3269%" y="213" width="0.0218%" height="15" fill="rgb(247,98,35)" fg:x="15" fg:w="1"/><text x="0.5769%" y="223.50"></text></g><g><title>`0x7FFE521508E4 (1 samples, 0.02%)</title><rect x="0.3269%" y="197" width="0.0218%" height="15" fill="rgb(247,138,52)" fg:x="15" fg:w="1"/><text x="0.5769%" y="207.50"></text></g><g><title>ms.exe`core::ptr::drop_in_place(alloc::vec::Vec&lt;enum2$ (2 samples, 0.04%)</title><rect x="0.3269%" y="501" width="0.0436%" height="15" fill="rgb(213,79,30)" fg:x="15" fg:w="2"/><text x="0.5769%" y="511.50"></text></g><g><title>ms.exe`core::ptr::drop_in_place&lt;ms_runtime::virtual_machine::VirtualMachine&gt; (2 samples, 0.04%)</title><rect x="0.3269%" y="485" width="0.0436%" height="15" fill="rgb(246,177,23)" fg:x="15" fg:w="2"/><text x="0.5769%" y="495.50"></text></g><g><title>ms.exe`core::ptr::drop_in_place(alloc::vec::Vec&lt;alloc::vec::Vec&lt;enum2$ (2 samples, 0.04%)</title><rect x="0.3269%" y="469" width="0.0436%" height="15" fill="rgb(230,62,27)" fg:x="15" fg:w="2"/><text x="0.5769%" y="479.50"></text></g><g><title>ms.exe`alloc::vec::impl$25::drop(alloc::vec::Vec&lt;alloc::vec::Vec&lt;enum2$ (2 samples, 0.04%)</title><rect x="0.3269%" y="453" width="0.0436%" height="15" fill="rgb(216,154,8)" fg:x="15" fg:w="2"/><text x="0.5769%" y="463.50"></text></g><g><title>ms.exe`alloc::vec::Vec&lt;alloc::vec::Vec&lt;enum2$&lt;ms_runtime::value::Value&gt;,alloc::alloc::Global&gt;,alloc::alloc::Global&gt;::as_mut_ptr (2 samples, 0.04%)</title><rect x="0.3269%" y="437" width="0.0436%" height="15" fill="rgb(244,35,45)" fg:x="15" fg:w="2"/><text x="0.5769%" y="447.50"></text></g><g><title>ms.exe`alloc::raw_vec::RawVec&lt;alloc::vec::Vec&lt;enum2$&lt;ms_runtime::value::Value&gt;,alloc::alloc::Global&gt;,alloc::alloc::Global&gt;::ptr (2 samples, 0.04%)</title><rect x="0.3269%" y="421" width="0.0436%" height="15" fill="rgb(251,115,12)" fg:x="15" fg:w="2"/><text x="0.5769%" y="431.50"></text></g><g><title>ms.exe`alloc::raw_vec::RawVecInner&lt;alloc::alloc::Global&gt;::ptr (2 samples, 0.04%)</title><rect x="0.3269%" y="405" width="0.0436%" height="15" fill="rgb(240,54,50)" fg:x="15" fg:w="2"/><text x="0.5769%" y="415.50"></text></g><g><title>ms.exe`alloc::raw_vec::RawVecInner&lt;alloc::alloc::Global&gt;::non_null (2 samples, 0.04%)</title><rect x="0.3269%" y="389" width="0.0436%" height="15" fill="rgb(233,84,52)" fg:x="15" fg:w="2"/><text x="0.5769%" y="399.50"></text></g><g><title>ms.exe`hashbrown::raw::impl$18::drop&lt;tuple$&lt;alloc::string::String,ms_runtime::dymodule::DyModule&gt;,alloc::alloc::Global&gt;(hashbrown::raw::RawTable&lt;tuple$ (2 samples, 0.04%)</title><rect x="0.3269%" y="373" width="0.0436%" height="15" fill="rgb(207,117,47)" fg:x="15" fg:w="2"/><text x="0.5769%" y="383.50"></text></g><g><title>ms.exe`hashbrown::raw::RawTableInner::drop_inner_table (2 samples, 0.04%)</title><rect x="0.3269%" y="357" width="0.0436%" height="15" fill="rgb(249,43,39)" fg:x="15" fg:w="2"/><text x="0.5769%" y="367.50"></text></g><g><title>ms.exe`hashbrown::raw::RawTableInner::drop_elements (2 samples, 0.04%)</title><rect x="0.3269%" y="341" width="0.0436%" height="15" fill="rgb(209,38,44)" fg:x="15" fg:w="2"/><text x="0.5769%" y="351.50"></text></g><g><title>ms.exe`hashbrown::raw::Bucket&lt;tuple$&lt;alloc::string::String,ms_runtime::dymodule::DyModule&gt; &gt;::drop (2 samples, 0.04%)</title><rect x="0.3269%" y="325" width="0.0436%" height="15" fill="rgb(236,212,23)" fg:x="15" fg:w="2"/><text x="0.5769%" y="335.50"></text></g><g><title>ms.exe`core::ptr::mut_ptr::impl$0::drop_in_place(tuple$ (2 samples, 0.04%)</title><rect x="0.3269%" y="309" width="0.0436%" height="15" fill="rgb(242,79,21)" fg:x="15" fg:w="2"/><text x="0.5769%" y="319.50"></text></g><g><title>ms.exe`core::ptr::drop_in_place(tuple$ (2 samples, 0.04%)</title><rect x="0.3269%" y="293" width="0.0436%" height="15" fill="rgb(211,96,35)" fg:x="15" fg:w="2"/><text x="0.5769%" y="303.50"></text></g><g><title>ms.exe`core::ptr::drop_in_place (2 samples, 0.04%)</title><rect x="0.3269%" y="277" width="0.0436%" height="15" fill="rgb(253,215,40)" fg:x="15" fg:w="2"/><text x="0.5769%" y="287.50"></text></g><g><title>`0x7FFE4F42E76E (2 samples, 0.04%)</title><rect x="0.3269%" y="261" width="0.0436%" height="15" fill="rgb(211,81,21)" fg:x="15" fg:w="2"/><text x="0.5769%" y="271.50"></text></g><g><title>`0x7FFE520DD3F5 (1 samples, 0.02%)</title><rect x="0.3487%" y="245" width="0.0218%" height="15" fill="rgb(208,190,38)" fg:x="16" fg:w="1"/><text x="0.5987%" y="255.50"></text></g><g><title>`0x7FFE520DD47E (1 samples, 0.02%)</title><rect x="0.3487%" y="229" width="0.0218%" height="15" fill="rgb(235,213,38)" fg:x="16" fg:w="1"/><text x="0.5987%" y="239.50"></text></g><g><title>`0x7FFE5211B75C (1 samples, 0.02%)</title><rect x="0.3487%" y="213" width="0.0218%" height="15" fill="rgb(237,122,38)" fg:x="16" fg:w="1"/><text x="0.5987%" y="223.50"></text></g><g><title>`0x7FFE5211B72A (1 samples, 0.02%)</title><rect x="0.3487%" y="197" width="0.0218%" height="15" fill="rgb(244,218,35)" fg:x="16" fg:w="1"/><text x="0.5987%" y="207.50"></text></g><g><title>`0x7FFE520D2549 (1 samples, 0.02%)</title><rect x="0.3487%" y="181" width="0.0218%" height="15" fill="rgb(240,68,47)" fg:x="16" fg:w="1"/><text x="0.5987%" y="191.50"></text></g><g><title>`0x7FFE52123C50 (1 samples, 0.02%)</title><rect x="0.3487%" y="165" width="0.0218%" height="15" fill="rgb(210,16,53)" fg:x="16" fg:w="1"/><text x="0.5987%" y="175.50"></text></g><g><title>`0x7FFE521508E4 (1 samples, 0.02%)</title><rect x="0.3487%" y="149" width="0.0218%" height="15" fill="rgb(235,124,12)" fg:x="16" fg:w="1"/><text x="0.5987%" y="159.50"></text></g><g><title>ms.exe`enum2$&lt;core::result::Result&lt;alloc::string::String,std::io::error::Error&gt; &gt;::expect(enum2$&lt;core::result::Result&lt;alloc::string::String,std::io::error::Error&gt; &gt;, ref$ (1 samples, 0.02%)</title><rect x="0.3705%" y="501" width="0.0218%" height="15" fill="rgb(224,169,11)" fg:x="17" fg:w="1"/><text x="0.6205%" y="511.50"></text></g><g><title>ms.exe`std::fs::read_to_string::inner (1 samples, 0.02%)</title><rect x="0.3705%" y="485" width="0.0218%" height="15" fill="rgb(250,166,2)" fg:x="17" fg:w="1"/><text x="0.6205%" y="495.50"></text></g><g><title>ms.exe`enum2$&lt;core::result::Result&lt;alloc::vec::Vec&lt;enum2$&lt;ms_runtime::instruction::Instruction&gt;,alloc::alloc::Global&gt;,alloc::string::String&gt; &gt;::expect(enum2$&lt;core::result::Result&lt;alloc::vec::Vec&lt;enum2$&lt;ms_runtime::instruction::Instruction&gt;,alloc::alloc::Global&gt;,alloc::string::String&gt; &gt;, ref$ (1 samples, 0.02%)</title><rect x="0.3923%" y="501" width="0.0218%" height="15" fill="rgb(242,216,29)" fg:x="18" fg:w="1"/><text x="0.6423%" y="511.50"></text></g><g><title>ms.exe`ms_runtime::asm::assemble(ref$ (1 samples, 0.02%)</title><rect x="0.3923%" y="485" width="0.0218%" height="15" fill="rgb(230,116,27)" fg:x="18" fg:w="1"/><text x="0.6423%" y="495.50"></text></g><g><title>ms.exe`alloc::string::String::as_str (1 samples, 0.02%)</title><rect x="0.3923%" y="469" width="0.0218%" height="15" fill="rgb(228,99,48)" fg:x="18" fg:w="1"/><text x="0.6423%" y="479.50"></text></g><g><title>ms.exe`ms_runtime::parser::Parser::parse (1 samples, 0.02%)</title><rect x="0.3923%" y="453" width="0.0218%" height="15" fill="rgb(253,11,6)" fg:x="18" fg:w="1"/><text x="0.6423%" y="463.50"></text></g><g><title>ms.exe`core::result::impl$26::branch(enum2$&lt;core::result::Result&lt;enum2$&lt;core::option::Option&lt;enum2$ (1 samples, 0.02%)</title><rect x="0.3923%" y="437" width="0.0218%" height="15" fill="rgb(247,143,39)" fg:x="18" fg:w="1"/><text x="0.6423%" y="447.50"></text></g><g><title>ms.exe`ms_runtime::parser::Parser::parse_sexp (1 samples, 0.02%)</title><rect x="0.3923%" y="421" width="0.0218%" height="15" fill="rgb(236,97,10)" fg:x="18" fg:w="1"/><text x="0.6423%" y="431.50"></text></g><g><title>ms.exe`core::result::impl$26::branch(enum2$&lt;core::result::Result&lt;enum2$&lt;core::option::Option&lt;enum2$ (1 samples, 0.02%)</title><rect x="0.3923%" y="405" width="0.0218%" height="15" fill="rgb(233,208,19)" fg:x="18" fg:w="1"/><text x="0.6423%" y="415.50"></text></g><g><title>ms.exe`ms_runtime::parser::Parser::parse_sexp (1 samples, 0.02%)</title><rect x="0.3923%" y="389" width="0.0218%" height="15" fill="rgb(216,164,2)" fg:x="18" fg:w="1"/><text x="0.6423%" y="399.50"></text></g><g><title>ms.exe`ms_runtime::parser::Parser::next_token (1 samples, 0.02%)</title><rect x="0.3923%" y="373" width="0.0218%" height="15" fill="rgb(220,129,5)" fg:x="18" fg:w="1"/><text x="0.6423%" y="383.50"></text></g><g><title>ms.exe`core::str::impl$0::chars(ref$ (1 samples, 0.02%)</title><rect x="0.3923%" y="357" width="0.0218%" height="15" fill="rgb(242,17,10)" fg:x="18" fg:w="1"/><text x="0.6423%" y="367.50"></text></g><g><title>ms.exe`enum2$&lt;core::result::Result&lt;tuple$&lt;&gt;,core::num::nonzero::NonZero&lt;usize&gt; &gt; &gt;::ok(enum2$&lt;core::result::Result&lt;tuple$&lt;&gt;,core::num::nonzero::NonZero (1 samples, 0.02%)</title><rect x="0.3923%" y="341" width="0.0218%" height="15" fill="rgb(242,107,0)" fg:x="18" fg:w="1"/><text x="0.6423%" y="351.50"></text></g><g><title>ms.exe`core::str::iter::impl$0::advance_by (1 samples, 0.02%)</title><rect x="0.3923%" y="325" width="0.0218%" height="15" fill="rgb(251,28,31)" fg:x="18" fg:w="1"/><text x="0.6423%" y="335.50"></text></g><g><title>ms.exe`core::str::validations::utf8_char_width (1 samples, 0.02%)</title><rect x="0.3923%" y="309" width="0.0218%" height="15" fill="rgb(233,223,10)" fg:x="18" fg:w="1"/><text x="0.6423%" y="319.50"></text></g><g><title>`0x7FFE520C0F1E (1 samples, 0.02%)</title><rect x="0.4141%" y="293" width="0.0218%" height="15" fill="rgb(215,21,27)" fg:x="19" fg:w="1"/><text x="0.6641%" y="303.50"></text></g><g><title>`0x7FFE520DE027 (1 samples, 0.02%)</title><rect x="0.4141%" y="277" width="0.0218%" height="15" fill="rgb(232,23,21)" fg:x="19" fg:w="1"/><text x="0.6641%" y="287.50"></text></g><g><title>`0x7FFE520C92BC (1 samples, 0.02%)</title><rect x="0.4141%" y="261" width="0.0218%" height="15" fill="rgb(244,5,23)" fg:x="19" fg:w="1"/><text x="0.6641%" y="271.50"></text></g><g><title>`0x7FFE520DC744 (1 samples, 0.02%)</title><rect x="0.4359%" y="261" width="0.0218%" height="15" fill="rgb(226,81,46)" fg:x="20" fg:w="1"/><text x="0.6859%" y="271.50"></text></g><g><title>`0x7FFE520DC5BA (1 samples, 0.02%)</title><rect x="0.4359%" y="245" width="0.0218%" height="15" fill="rgb(247,70,30)" fg:x="20" fg:w="1"/><text x="0.6859%" y="255.50"></text></g><g><title>`0x7FFE520DC9BC (1 samples, 0.02%)</title><rect x="0.4359%" y="229" width="0.0218%" height="15" fill="rgb(212,68,19)" fg:x="20" fg:w="1"/><text x="0.6859%" y="239.50"></text></g><g><title>`0x7FFE521508A4 (1 samples, 0.02%)</title><rect x="0.4359%" y="213" width="0.0218%" height="15" fill="rgb(240,187,13)" fg:x="20" fg:w="1"/><text x="0.6859%" y="223.50"></text></g><g><title>`0x7FFE520D8DC4 (3 samples, 0.07%)</title><rect x="0.4141%" y="325" width="0.0654%" height="15" fill="rgb(223,113,26)" fg:x="19" fg:w="3"/><text x="0.6641%" y="335.50"></text></g><g><title>`0x7FFE520C13B0 (3 samples, 0.07%)</title><rect x="0.4141%" y="309" width="0.0654%" height="15" fill="rgb(206,192,2)" fg:x="19" fg:w="3"/><text x="0.6641%" y="319.50"></text></g><g><title>`0x7FFE520C0FE8 (2 samples, 0.04%)</title><rect x="0.4359%" y="293" width="0.0436%" height="15" fill="rgb(241,108,4)" fg:x="20" fg:w="2"/><text x="0.6859%" y="303.50"></text></g><g><title>`0x7FFE520C0B2F (2 samples, 0.04%)</title><rect x="0.4359%" y="277" width="0.0436%" height="15" fill="rgb(247,173,49)" fg:x="20" fg:w="2"/><text x="0.6859%" y="287.50"></text></g><g><title>`0x7FFE520DC8E8 (1 samples, 0.02%)</title><rect x="0.4577%" y="261" width="0.0218%" height="15" fill="rgb(224,114,35)" fg:x="21" fg:w="1"/><text x="0.7077%" y="271.50"></text></g><g><title>`0x7FFE520D4BAB (1 samples, 0.02%)</title><rect x="0.4577%" y="245" width="0.0218%" height="15" fill="rgb(245,159,27)" fg:x="21" fg:w="1"/><text x="0.7077%" y="255.50"></text></g><g><title>`0x7FFE520D4DF6 (1 samples, 0.02%)</title><rect x="0.4577%" y="229" width="0.0218%" height="15" fill="rgb(245,172,44)" fg:x="21" fg:w="1"/><text x="0.7077%" y="239.50"></text></g><g><title>`0x7FFE520D5DB4 (1 samples, 0.02%)</title><rect x="0.4577%" y="213" width="0.0218%" height="15" fill="rgb(236,23,11)" fg:x="21" fg:w="1"/><text x="0.7077%" y="223.50"></text></g><g><title>`0x7FFE520DD319 (1 samples, 0.02%)</title><rect x="0.4577%" y="197" width="0.0218%" height="15" fill="rgb(205,117,38)" fg:x="21" fg:w="1"/><text x="0.7077%" y="207.50"></text></g><g><title>`0x7FFE520DC8E8 (1 samples, 0.02%)</title><rect x="0.4577%" y="181" width="0.0218%" height="15" fill="rgb(237,72,25)" fg:x="21" fg:w="1"/><text x="0.7077%" y="191.50"></text></g><g><title>`0x7FFE520D4BAB (1 samples, 0.02%)</title><rect x="0.4577%" y="165" width="0.0218%" height="15" fill="rgb(244,70,9)" fg:x="21" fg:w="1"/><text x="0.7077%" y="175.50"></text></g><g><title>`0x7FFE520D4DF6 (1 samples, 0.02%)</title><rect x="0.4577%" y="149" width="0.0218%" height="15" fill="rgb(217,125,39)" fg:x="21" fg:w="1"/><text x="0.7077%" y="159.50"></text></g><g><title>`0x7FFE520D5DB4 (1 samples, 0.02%)</title><rect x="0.4577%" y="133" width="0.0218%" height="15" fill="rgb(235,36,10)" fg:x="21" fg:w="1"/><text x="0.7077%" y="143.50"></text></g><g><title>`0x7FFE520DD319 (1 samples, 0.02%)</title><rect x="0.4577%" y="117" width="0.0218%" height="15" fill="rgb(251,123,47)" fg:x="21" fg:w="1"/><text x="0.7077%" y="127.50"></text></g><g><title>`0x7FFE520DC889 (1 samples, 0.02%)</title><rect x="0.4577%" y="101" width="0.0218%" height="15" fill="rgb(221,13,13)" fg:x="21" fg:w="1"/><text x="0.7077%" y="111.50"></text></g><g><title>`0x7FFE520DB436 (1 samples, 0.02%)</title><rect x="0.4577%" y="85" width="0.0218%" height="15" fill="rgb(238,131,9)" fg:x="21" fg:w="1"/><text x="0.7077%" y="95.50"></text></g><g><title>`0x7FFE520DB611 (1 samples, 0.02%)</title><rect x="0.4577%" y="69" width="0.0218%" height="15" fill="rgb(211,50,8)" fg:x="21" fg:w="1"/><text x="0.7077%" y="79.50"></text></g><g><title>`0x7FFE520DB751 (1 samples, 0.02%)</title><rect x="0.4577%" y="53" width="0.0218%" height="15" fill="rgb(245,182,24)" fg:x="21" fg:w="1"/><text x="0.7077%" y="63.50"></text></g><g><title>`0x7FFE520DB836 (1 samples, 0.02%)</title><rect x="0.4577%" y="37" width="0.0218%" height="15" fill="rgb(242,14,37)" fg:x="21" fg:w="1"/><text x="0.7077%" y="47.50"></text></g><g><title>ms.exe`enum2$&lt;core::result::Result&lt;tuple$&lt;alloc::vec::Vec&lt;ms_runtime::module::Module,alloc::alloc::Global&gt;,alloc::vec::Vec&lt;ms_runtime::dymodule::DyModule,alloc::alloc::Global&gt; &gt;,alloc::string::String&gt; &gt;::expect(enum2$&lt;core::result::Result&lt;tuple$&lt;alloc::vec::Vec&lt;ms_runtime::module::Module,alloc::alloc::Global&gt;,alloc::vec::Vec&lt;ms_runtime::dymodule::DyModule,alloc::alloc::Global&gt; &gt;,alloc::string::String&gt; &gt;, ref$ (4 samples, 0.09%)</title><rect x="0.4141%" y="501" width="0.0872%" height="15" fill="rgb(246,228,12)" fg:x="19" fg:w="4"/><text x="0.6641%" y="511.50"></text></g><g><title>ms.exe`ms_runtime::load_modules(alloc::vec::Vec&lt;enum2$ (4 samples, 0.09%)</title><rect x="0.4141%" y="485" width="0.0872%" height="15" fill="rgb(213,55,15)" fg:x="19" fg:w="4"/><text x="0.6641%" y="495.50"></text></g><g><title>ms.exe`enum2$&lt;core::result::Result&lt;libloading::safe::Library,enum2$&lt;libloading::error::Error&gt; &gt; &gt;::map_err(enum2$&lt;core::result::Result&lt;libloading::safe::Library,enum2$ (4 samples, 0.09%)</title><rect x="0.4141%" y="469" width="0.0872%" height="15" fill="rgb(209,9,3)" fg:x="19" fg:w="4"/><text x="0.6641%" y="479.50"></text></g><g><title>ms.exe`libloading::safe::Library::new&lt;ref$&lt;alloc::string::String&gt; &gt; (4 samples, 0.09%)</title><rect x="0.4141%" y="453" width="0.0872%" height="15" fill="rgb(230,59,30)" fg:x="19" fg:w="4"/><text x="0.6641%" y="463.50"></text></g><g><title>ms.exe`libloading::os::windows::Library::new (4 samples, 0.09%)</title><rect x="0.4141%" y="437" width="0.0872%" height="15" fill="rgb(209,121,21)" fg:x="19" fg:w="4"/><text x="0.6641%" y="447.50"></text></g><g><title>ms.exe`libloading::os::windows::Library::load_with_flags (4 samples, 0.09%)</title><rect x="0.4141%" y="421" width="0.0872%" height="15" fill="rgb(220,109,13)" fg:x="19" fg:w="4"/><text x="0.6641%" y="431.50"></text></g><g><title>ms.exe`libloading::os::windows::with_get_last_error(enum2$&lt;libloading::error::Error&gt; (*)(libloading::error::WindowsError), libloading::os::windows::impl$2::load_with_flags::closure_env$1&lt;ref$ (4 samples, 0.09%)</title><rect x="0.4141%" y="405" width="0.0872%" height="15" fill="rgb(232,18,1)" fg:x="19" fg:w="4"/><text x="0.6641%" y="415.50"></text></g><g><title>ms.exe`libloading::os::windows::impl$2::load_with_flags::closure$1(libloading::os::windows::impl$2::load_with_flags::closure_env$1&lt;ref$ (4 samples, 0.09%)</title><rect x="0.4141%" y="389" width="0.0872%" height="15" fill="rgb(215,41,42)" fg:x="19" fg:w="4"/><text x="0.6641%" y="399.50"></text></g><g><title>`0x7FFE4F41B732 (4 samples, 0.09%)</title><rect x="0.4141%" y="373" width="0.0872%" height="15" fill="rgb(224,123,36)" fg:x="19" fg:w="4"/><text x="0.6641%" y="383.50"></text></g><g><title>`0x7FFE520DA74A (4 samples, 0.09%)</title><rect x="0.4141%" y="357" width="0.0872%" height="15" fill="rgb(240,125,3)" fg:x="19" fg:w="4"/><text x="0.6641%" y="367.50"></text></g><g><title>`0x7FFE520C90CC (4 samples, 0.09%)</title><rect x="0.4141%" y="341" width="0.0872%" height="15" fill="rgb(205,98,50)" fg:x="19" fg:w="4"/><text x="0.6641%" y="351.50"></text></g><g><title>`0x7FFE520D8E30 (1 samples, 0.02%)</title><rect x="0.4795%" y="325" width="0.0218%" height="15" fill="rgb(205,185,37)" fg:x="22" fg:w="1"/><text x="0.7295%" y="335.50"></text></g><g><title>`0x7FFE520DDB1D (1 samples, 0.02%)</title><rect x="0.4795%" y="309" width="0.0218%" height="15" fill="rgb(238,207,15)" fg:x="22" fg:w="1"/><text x="0.7295%" y="319.50"></text></g><g><title>`0x7FFE5211D460 (1 samples, 0.02%)</title><rect x="0.4795%" y="293" width="0.0218%" height="15" fill="rgb(213,199,42)" fg:x="22" fg:w="1"/><text x="0.7295%" y="303.50"></text></g><g><title>`0x7FFE5211D3EE (1 samples, 0.02%)</title><rect x="0.4795%" y="277" width="0.0218%" height="15" fill="rgb(235,201,11)" fg:x="22" fg:w="1"/><text x="0.7295%" y="287.50"></text></g><g><title>`0x7FFE5211D63D (1 samples, 0.02%)</title><rect x="0.4795%" y="261" width="0.0218%" height="15" fill="rgb(207,46,11)" fg:x="22" fg:w="1"/><text x="0.7295%" y="271.50"></text></g><g><title>`0x7FFE520D8B8F (1 samples, 0.02%)</title><rect x="0.4795%" y="245" width="0.0218%" height="15" fill="rgb(241,35,35)" fg:x="22" fg:w="1"/><text x="0.7295%" y="255.50"></text></g><g><title>`0x7FFE4E8F5165 (1 samples, 0.02%)</title><rect x="0.4795%" y="229" width="0.0218%" height="15" fill="rgb(243,32,47)" fg:x="22" fg:w="1"/><text x="0.7295%" y="239.50"></text></g><g><title>`0x7FFE4E8F7392 (1 samples, 0.02%)</title><rect x="0.4795%" y="213" width="0.0218%" height="15" fill="rgb(247,202,23)" fg:x="22" fg:w="1"/><text x="0.7295%" y="223.50"></text></g><g><title>`0x7FFE4E8F35A2 (1 samples, 0.02%)</title><rect x="0.4795%" y="197" width="0.0218%" height="15" fill="rgb(219,102,11)" fg:x="22" fg:w="1"/><text x="0.7295%" y="207.50"></text></g><g><title>`0x7FFE520E19D0 (1 samples, 0.02%)</title><rect x="0.4795%" y="181" width="0.0218%" height="15" fill="rgb(243,110,44)" fg:x="22" fg:w="1"/><text x="0.7295%" y="191.50"></text></g><g><title>`0x7FFE520E26BA (1 samples, 0.02%)</title><rect x="0.4795%" y="165" width="0.0218%" height="15" fill="rgb(222,74,54)" fg:x="22" fg:w="1"/><text x="0.7295%" y="175.50"></text></g><g><title>`0x7FFE520E2547 (1 samples, 0.02%)</title><rect x="0.4795%" y="149" width="0.0218%" height="15" fill="rgb(216,99,12)" fg:x="22" fg:w="1"/><text x="0.7295%" y="159.50"></text></g><g><title>`0x7FFE52153DF4 (1 samples, 0.02%)</title><rect x="0.4795%" y="133" width="0.0218%" height="15" fill="rgb(226,22,26)" fg:x="22" fg:w="1"/><text x="0.7295%" y="143.50"></text></g><g><title>ms.exe`ms_runtime::virtual_machine::VirtualMachine::call(ref$&lt;str$&gt;, ref$&lt;str$&gt;, alloc::vec::Vec&lt;enum2$ (1 samples, 0.02%)</title><rect x="0.9154%" y="453" width="0.0218%" height="15" fill="rgb(217,163,10)" fg:x="42" fg:w="1"/><text x="1.1654%" y="463.50"></text></g><g><title>ms.exe`alloc::boxed::impl$50::call(enum2$&lt;core::option::Option&lt;enum2$&lt;ms_runtime::value::Value&gt; &gt; &gt; (***)(alloc::vec::Vec&lt;enum2$&lt;ms_runtime::value::Value&gt;,alloc::alloc::Global&gt;), alloc::vec::Vec&lt;enum2$ (1 samples, 0.02%)</title><rect x="0.9154%" y="437" width="0.0218%" height="15" fill="rgb(213,25,53)" fg:x="42" fg:w="1"/><text x="1.1654%" y="447.50"></text></g><g><title>ms.exe`core::ops::function::Fn::call(enum2$&lt;core::option::Option&lt;enum2$&lt;ms_runtime::value::Value&gt; &gt; &gt; (**)(alloc::vec::Vec&lt;enum2$&lt;ms_runtime::value::Value&gt;,alloc::alloc::Global&gt;), alloc::vec::Vec&lt;enum2$ (1 samples, 0.02%)</title><rect x="0.9154%" y="421" width="0.0218%" height="15" fill="rgb(252,105,26)" fg:x="42" fg:w="1"/><text x="1.1654%" y="431.50"></text></g><g><title>`0x7FFE28941BA3 (1 samples, 0.02%)</title><rect x="0.9154%" y="405" width="0.0218%" height="15" fill="rgb(220,39,43)" fg:x="42" fg:w="1"/><text x="1.1654%" y="415.50"></text></g><g><title>`0x7FFE28989C91 (1 samples, 0.02%)</title><rect x="0.9154%" y="389" width="0.0218%" height="15" fill="rgb(229,68,48)" fg:x="42" fg:w="1"/><text x="1.1654%" y="399.50"></text></g><g><title>`0x7FFE28987B2B (1 samples, 0.02%)</title><rect x="0.9154%" y="373" width="0.0218%" height="15" fill="rgb(252,8,32)" fg:x="42" fg:w="1"/><text x="1.1654%" y="383.50"></text></g><g><title>`0x7FFE289CD64C (1 samples, 0.02%)</title><rect x="0.9154%" y="357" width="0.0218%" height="15" fill="rgb(223,20,43)" fg:x="42" fg:w="1"/><text x="1.1654%" y="367.50"></text></g><g><title>`0x7FFE2898BABE (1 samples, 0.02%)</title><rect x="0.9154%" y="341" width="0.0218%" height="15" fill="rgb(229,81,49)" fg:x="42" fg:w="1"/><text x="1.1654%" y="351.50"></text></g><g><title>`0x7FFE28987FCD (1 samples, 0.02%)</title><rect x="0.9154%" y="325" width="0.0218%" height="15" fill="rgb(236,28,36)" fg:x="42" fg:w="1"/><text x="1.1654%" y="335.50"></text></g><g><title>`0x7FFE28983AA0 (1 samples, 0.02%)</title><rect x="0.9154%" y="309" width="0.0218%" height="15" fill="rgb(249,185,26)" fg:x="42" fg:w="1"/><text x="1.1654%" y="319.50"></text></g><g><title>`0x7FFE289AA493 (1 samples, 0.02%)</title><rect x="0.9154%" y="293" width="0.0218%" height="15" fill="rgb(249,174,33)" fg:x="42" fg:w="1"/><text x="1.1654%" y="303.50"></text></g><g><title>`0x7FFE289AA6FB (1 samples, 0.02%)</title><rect x="0.9154%" y="277" width="0.0218%" height="15" fill="rgb(233,201,37)" fg:x="42" fg:w="1"/><text x="1.1654%" y="287.50"></text></g><g><title>`0x7FFE4F432E4E (1 samples, 0.02%)</title><rect x="0.9154%" y="261" width="0.0218%" height="15" fill="rgb(221,78,26)" fg:x="42" fg:w="1"/><text x="1.1654%" y="271.50"></text></g><g><title>`0x7FFE4F432EE3 (1 samples, 0.02%)</title><rect x="0.9154%" y="245" width="0.0218%" height="15" fill="rgb(250,127,30)" fg:x="42" fg:w="1"/><text x="1.1654%" y="255.50"></text></g><g><title>`0x7FFE4F433219 (1 samples, 0.02%)</title><rect x="0.9154%" y="229" width="0.0218%" height="15" fill="rgb(230,49,44)" fg:x="42" fg:w="1"/><text x="1.1654%" y="239.50"></text></g><g><title>`0x7FFE52150484 (1 samples, 0.02%)</title><rect x="0.9154%" y="213" width="0.0218%" height="15" fill="rgb(229,67,23)" fg:x="42" fg:w="1"/><text x="1.1654%" y="223.50"></text></g><g><title>ms.exe`alloc::vec::Vec&lt;enum2$&lt;ms_runtime::value::Value&gt;,alloc::alloc::Global&gt;::pop (939 samples, 20.47%)</title><rect x="42.2188%" y="437" width="20.4664%" height="15" fill="rgb(249,83,47)" fg:x="1937" fg:w="939"/><text x="42.4688%" y="447.50">ms.exe`alloc::vec::Vec&lt;enum2$&lt;ms..</text></g><g><title>ms.exe`alloc::vec::Vec&lt;enum2$&lt;ms_runtime::value::Value&gt;,alloc::alloc::Global&gt;::as_ptr (15 samples, 0.33%)</title><rect x="62.3583%" y="421" width="0.3269%" height="15" fill="rgb(215,43,3)" fg:x="2861" fg:w="15"/><text x="62.6083%" y="431.50"></text></g><g><title>ms.exe`alloc::raw_vec::RawVec&lt;enum2$&lt;ms_runtime::value::Value&gt;,alloc::alloc::Global&gt;::ptr (15 samples, 0.33%)</title><rect x="62.3583%" y="405" width="0.3269%" height="15" fill="rgb(238,154,13)" fg:x="2861" fg:w="15"/><text x="62.6083%" y="415.50"></text></g><g><title>ms.exe`alloc::raw_vec::RawVecInner&lt;alloc::alloc::Global&gt;::ptr (15 samples, 0.33%)</title><rect x="62.3583%" y="389" width="0.3269%" height="15" fill="rgb(219,56,2)" fg:x="2861" fg:w="15"/><text x="62.6083%" y="399.50"></text></g><g><title>ms.exe`alloc::raw_vec::RawVecInner&lt;alloc::alloc::Global&gt;::non_null (15 samples, 0.33%)</title><rect x="62.3583%" y="373" width="0.3269%" height="15" fill="rgb(233,0,4)" fg:x="2861" fg:w="15"/><text x="62.6083%" y="383.50"></text></g><g><title>ms.exe`alloc::vec::Vec&lt;enum2$&lt;ms_runtime::value::Value&gt;,alloc::alloc::Global&gt;::push(enum2$ (1,234 samples, 26.90%)</title><rect x="62.6853%" y="437" width="26.8963%" height="15" fill="rgb(235,30,7)" fg:x="2876" fg:w="1234"/><text x="62.9353%" y="447.50">ms.exe`alloc::vec::Vec&lt;enum2$&lt;ms_runtime::v..</text></g><g><title>ms.exe`core::ptr::write(enum2$&lt;ms_runtime::value::Value&gt;*, enum2$ (2 samples, 0.04%)</title><rect x="89.5379%" y="421" width="0.0436%" height="15" fill="rgb(250,79,13)" fg:x="4108" fg:w="2"/><text x="89.7879%" y="431.50"></text></g><g><title>ms.exe`alloc::vec::impl$14::index_mut(alloc::vec::Vec&lt;enum2$ (23 samples, 0.50%)</title><rect x="89.5815%" y="437" width="0.5013%" height="15" fill="rgb(211,146,34)" fg:x="4110" fg:w="23"/><text x="89.8315%" y="447.50"></text></g><g><title>ms.exe`alloc::vec::impl$9::deref_mut(alloc::vec::Vec&lt;enum2$ (23 samples, 0.50%)</title><rect x="89.5815%" y="421" width="0.5013%" height="15" fill="rgb(228,22,38)" fg:x="4110" fg:w="23"/><text x="89.8315%" y="431.50"></text></g><g><title>ms.exe`core::slice::index::impl$2::index_mut(unsigned long long, ref_mut$&lt;slice2$&lt;enum2$ (23 samples, 0.50%)</title><rect x="89.5815%" y="405" width="0.5013%" height="15" fill="rgb(235,168,5)" fg:x="4110" fg:w="23"/><text x="89.8315%" y="415.50"></text></g><g><title>ms.exe`alloc::vec::Vec&lt;enum2$&lt;ms_runtime::instruction::Instruction&gt;,alloc::alloc::Global&gt;::as_slice (27 samples, 0.59%)</title><rect x="90.0828%" y="421" width="0.5885%" height="15" fill="rgb(221,155,16)" fg:x="4133" fg:w="27"/><text x="90.3328%" y="431.50"></text></g><g><title>ms.exe`alloc::vec::Vec&lt;enum2$&lt;ms_runtime::instruction::Instruction&gt;,alloc::alloc::Global&gt;::as_ptr (27 samples, 0.59%)</title><rect x="90.0828%" y="405" width="0.5885%" height="15" fill="rgb(215,215,53)" fg:x="4133" fg:w="27"/><text x="90.3328%" y="415.50"></text></g><g><title>ms.exe`alloc::raw_vec::RawVec&lt;enum2$&lt;ms_runtime::instruction::Instruction&gt;,alloc::alloc::Global&gt;::ptr (27 samples, 0.59%)</title><rect x="90.0828%" y="389" width="0.5885%" height="15" fill="rgb(223,4,10)" fg:x="4133" fg:w="27"/><text x="90.3328%" y="399.50"></text></g><g><title>ms.exe`alloc::raw_vec::RawVecInner&lt;alloc::alloc::Global&gt;::ptr (27 samples, 0.59%)</title><rect x="90.0828%" y="373" width="0.5885%" height="15" fill="rgb(234,103,6)" fg:x="4133" fg:w="27"/><text x="90.3328%" y="383.50"></text></g><g><title>ms.exe`alloc::raw_vec::RawVecInner&lt;alloc::alloc::Global&gt;::non_null (27 samples, 0.59%)</title><rect x="90.0828%" y="357" width="0.5885%" height="15" fill="rgb(227,97,0)" fg:x="4133" fg:w="27"/><text x="90.3328%" y="367.50"></text></g><g><title>ms.exe`alloc::vec::impl$8::deref(alloc::vec::Vec&lt;enum2$ (43 samples, 0.94%)</title><rect x="90.0828%" y="437" width="0.9372%" height="15" fill="rgb(234,150,53)" fg:x="4133" fg:w="43"/><text x="90.3328%" y="447.50"></text></g><g><title>ms.exe`core::slice::iter::Iter&lt;enum2$&lt;ms_runtime::instruction::Instruction&gt; &gt;::new(ref$&lt;slice2$&lt;enum2$ (16 samples, 0.35%)</title><rect x="90.6713%" y="421" width="0.3487%" height="15" fill="rgb(228,201,54)" fg:x="4160" fg:w="16"/><text x="90.9213%" y="431.50"></text></g><g><title>ms.exe`core::ptr::mut_ptr::impl$0::add(enum2$ (16 samples, 0.35%)</title><rect x="90.6713%" y="405" width="0.3487%" height="15" fill="rgb(222,22,37)" fg:x="4160" fg:w="16"/><text x="90.9213%" y="415.50"></text></g><g><title>ms.exe`alloc::vec::impl$9::deref_mut(alloc::vec::Vec&lt;alloc::vec::Vec&lt;enum2$ (34 samples, 0.74%)</title><rect x="91.0201%" y="437" width="0.7411%" height="15" fill="rgb(237,53,32)" fg:x="4176" fg:w="34"/><text x="91.2701%" y="447.50"></text></g><g><title>ms.exe`alloc::vec::Vec&lt;alloc::vec::Vec&lt;enum2$&lt;ms_runtime::value::Value&gt;,alloc::alloc::Global&gt;,alloc::alloc::Global&gt;::as_mut_slice (33 samples, 0.72%)</title><rect x="91.0418%" y="421" width="0.7193%" height="15" fill="rgb(233,25,53)" fg:x="4177" fg:w="33"/><text x="91.2918%" y="431.50"></text></g><g><title>ms.exe`core::ptr::drop_in_place(enum2$ (45 samples, 0.98%)</title><rect x="91.7611%" y="437" width="0.9808%" height="15" fill="rgb(210,40,34)" fg:x="4210" fg:w="45"/><text x="92.0111%" y="447.50"></text></g><g><title>ms.exe`core::slice::iter::impl$182::next(core::slice::iter::Iter&lt;enum2$ (9 samples, 0.20%)</title><rect x="92.7419%" y="437" width="0.1962%" height="15" fill="rgb(241,220,44)" fg:x="4255" fg:w="9"/><text x="92.9919%" y="447.50"></text></g><g><title>ms.exe`ms_runtime::virtual_machine::VirtualMachine::execute(alloc::vec::Vec&lt;enum2$ (74 samples, 1.61%)</title><rect x="92.9381%" y="437" width="1.6129%" height="15" fill="rgb(235,28,35)" fg:x="4264" fg:w="74"/><text x="93.1881%" y="447.50"></text></g><g><title>ms.exe`alloc::vec::impl$8::deref(alloc::vec::Vec&lt;enum2$ (23 samples, 0.50%)</title><rect x="94.0497%" y="421" width="0.5013%" height="15" fill="rgb(210,56,17)" fg:x="4315" fg:w="23"/><text x="94.2997%" y="431.50"></text></g><g><title>ms.exe`core::slice::iter::Iter&lt;enum2$&lt;ms_runtime::instruction::Instruction&gt; &gt;::new(ref$&lt;slice2$&lt;enum2$ (23 samples, 0.50%)</title><rect x="94.0497%" y="405" width="0.5013%" height="15" fill="rgb(224,130,29)" fg:x="4315" fg:w="23"/><text x="94.2997%" y="415.50"></text></g><g><title>ms.exe`core::ptr::mut_ptr::impl$0::add(enum2$ (23 samples, 0.50%)</title><rect x="94.0497%" y="389" width="0.5013%" height="15" fill="rgb(235,212,8)" fg:x="4315" fg:w="23"/><text x="94.2997%" y="399.50"></text></g><g><title>ms.exe`alloc::vec::impl$8::deref(alloc::vec::Vec&lt;alloc::vec::Vec&lt;enum2$ (12 samples, 0.26%)</title><rect x="94.5510%" y="421" width="0.2616%" height="15" fill="rgb(223,33,50)" fg:x="4338" fg:w="12"/><text x="94.8010%" y="431.50"></text></g><g><title>ms.exe`alloc::vec::Vec&lt;alloc::vec::Vec&lt;enum2$&lt;ms_runtime::value::Value&gt;,alloc::alloc::Global&gt;,alloc::alloc::Global&gt;::as_slice (12 samples, 0.26%)</title><rect x="94.5510%" y="405" width="0.2616%" height="15" fill="rgb(219,149,13)" fg:x="4338" fg:w="12"/><text x="94.8010%" y="415.50"></text></g><g><title>ms.exe`alloc::vec::Vec&lt;alloc::vec::Vec&lt;enum2$&lt;ms_runtime::value::Value&gt;,alloc::alloc::Global&gt;,alloc::alloc::Global&gt;::as_ptr (12 samples, 0.26%)</title><rect x="94.5510%" y="389" width="0.2616%" height="15" fill="rgb(250,156,29)" fg:x="4338" fg:w="12"/><text x="94.8010%" y="399.50"></text></g><g><title>ms.exe`alloc::raw_vec::RawVec&lt;alloc::vec::Vec&lt;enum2$&lt;ms_runtime::value::Value&gt;,alloc::alloc::Global&gt;,alloc::alloc::Global&gt;::ptr (12 samples, 0.26%)</title><rect x="94.5510%" y="373" width="0.2616%" height="15" fill="rgb(216,193,19)" fg:x="4338" fg:w="12"/><text x="94.8010%" y="383.50"></text></g><g><title>ms.exe`alloc::raw_vec::RawVecInner&lt;alloc::alloc::Global&gt;::ptr (12 samples, 0.26%)</title><rect x="94.5510%" y="357" width="0.2616%" height="15" fill="rgb(216,135,14)" fg:x="4338" fg:w="12"/><text x="94.8010%" y="367.50"></text></g><g><title>ms.exe`alloc::raw_vec::RawVecInner&lt;alloc::alloc::Global&gt;::non_null (12 samples, 0.26%)</title><rect x="94.5510%" y="341" width="0.2616%" height="15" fill="rgb(241,47,5)" fg:x="4338" fg:w="12"/><text x="94.8010%" y="351.50"></text></g><g><title>ms.exe`core::slice::impl$0::get(ref$&lt;slice2$&lt;enum2$ (60 samples, 1.31%)</title><rect x="94.8126%" y="421" width="1.3078%" height="15" fill="rgb(233,42,35)" fg:x="4350" fg:w="60"/><text x="95.0626%" y="431.50"></text></g><g><title>ms.exe`core::slice::index::impl$2::get(unsigned long long, ref$&lt;slice2$&lt;enum2$ (60 samples, 1.31%)</title><rect x="94.8126%" y="405" width="1.3078%" height="15" fill="rgb(231,13,6)" fg:x="4350" fg:w="60"/><text x="95.0626%" y="415.50"></text></g><g><title>ms.exe`core::slice::index::get_noubcheck(ptr_const$&lt;slice2$&lt;enum2$ (43 samples, 0.94%)</title><rect x="95.1831%" y="389" width="0.9372%" height="15" fill="rgb(207,181,40)" fg:x="4367" fg:w="43"/><text x="95.4331%" y="399.50"></text></g><g><title>`0x7FFE5210AF38 (4,569 samples, 99.59%)</title><rect x="0.0872%" y="741" width="99.5859%" height="15" fill="rgb(254,173,49)" fg:x="4" fg:w="4569"/><text x="0.3372%" y="751.50">`0x7FFE5210AF38</text></g><g><title>`0x7FFE5080259D (4,569 samples, 99.59%)</title><rect x="0.0872%" y="725" width="99.5859%" height="15" fill="rgb(221,1,38)" fg:x="4" fg:w="4569"/><text x="0.3372%" y="735.50">`0x7FFE5080259D</text></g><g><title>ms.exe`__scrt_common_main_seh() (4,562 samples, 99.43%)</title><rect x="0.2398%" y="709" width="99.4333%" height="15" fill="rgb(206,124,46)" fg:x="11" fg:w="4562"/><text x="0.4898%" y="719.50">ms.exe`__scrt_common_main_seh()</text></g><g><title>ms.exe`invoke_main() (4,558 samples, 99.35%)</title><rect x="0.3269%" y="693" width="99.3461%" height="15" fill="rgb(249,21,11)" fg:x="15" fg:w="4558"/><text x="0.5769%" y="703.50">ms.exe`invoke_main()</text></g><g><title>ms.exe`main (4,558 samples, 99.35%)</title><rect x="0.3269%" y="677" width="99.3461%" height="15" fill="rgb(222,201,40)" fg:x="15" fg:w="4558"/><text x="0.5769%" y="687.50">ms.exe`main</text></g><g><title>ms.exe`std::rt::lang_start_internal (4,558 samples, 99.35%)</title><rect x="0.3269%" y="661" width="99.3461%" height="15" fill="rgb(235,61,29)" fg:x="15" fg:w="4558"/><text x="0.5769%" y="671.50">ms.exe`std::rt::lang_start_internal</text></g><g><title>ms.exe`std::panic::catch_unwind (4,558 samples, 99.35%)</title><rect x="0.3269%" y="645" width="99.3461%" height="15" fill="rgb(219,207,3)" fg:x="15" fg:w="4558"/><text x="0.5769%" y="655.50">ms.exe`std::panic::catch_unwind</text></g><g><title>ms.exe`std::panicking::try (4,558 samples, 99.35%)</title><rect x="0.3269%" y="629" width="99.3461%" height="15" fill="rgb(222,56,46)" fg:x="15" fg:w="4558"/><text x="0.5769%" y="639.50">ms.exe`std::panicking::try</text></g><g><title>ms.exe`std::panicking::try::do_call (4,558 samples, 99.35%)</title><rect x="0.3269%" y="613" width="99.3461%" height="15" fill="rgb(239,76,54)" fg:x="15" fg:w="4558"/><text x="0.5769%" y="623.50">ms.exe`std::panicking::try::do_call</text></g><g><title>ms.exe`std::rt::lang_start_internal::closure$1 (4,558 samples, 99.35%)</title><rect x="0.3269%" y="597" width="99.3461%" height="15" fill="rgb(231,124,27)" fg:x="15" fg:w="4558"/><text x="0.5769%" y="607.50">ms.exe`std::rt::lang_start_internal::closure$1</text></g><g><title>ms.exe`std::panic::catch_unwind (4,558 samples, 99.35%)</title><rect x="0.3269%" y="581" width="99.3461%" height="15" fill="rgb(249,195,6)" fg:x="15" fg:w="4558"/><text x="0.5769%" y="591.50">ms.exe`std::panic::catch_unwind</text></g><g><title>ms.exe`std::rt::lang_start::closure$0&lt;tuple$&lt;&gt; &gt;(std::rt::lang_start::closure_env$0&lt;tuple$ (4,558 samples, 99.35%)</title><rect x="0.3269%" y="565" width="99.3461%" height="15" fill="rgb(237,174,47)" fg:x="15" fg:w="4558"/><text x="0.5769%" y="575.50">ms.exe`std::rt::lang_start::closure$0&lt;tuple$&lt;&gt; &gt;(std::rt::lang_start::closure_env$0&lt;tuple$</text></g><g><title>ms.exe`std::sys::backtrace::__rust_begin_short_backtrace&lt;void (*)(),tuple$&lt;&gt; &gt;(void (*) (4,558 samples, 99.35%)</title><rect x="0.3269%" y="549" width="99.3461%" height="15" fill="rgb(206,201,31)" fg:x="15" fg:w="4558"/><text x="0.5769%" y="559.50">ms.exe`std::sys::backtrace::__rust_begin_short_backtrace&lt;void (*)(),tuple$&lt;&gt; &gt;(void (*)</text></g><g><title>ms.exe`ms::main (4,558 samples, 99.35%)</title><rect x="0.3269%" y="533" width="99.3461%" height="15" fill="rgb(231,57,52)" fg:x="15" fg:w="4558"/><text x="0.5769%" y="543.50">ms.exe`ms::main</text></g><g><title>ms.exe`ms::run(alloc::vec::Vec (4,558 samples, 99.35%)</title><rect x="0.3269%" y="517" width="99.3461%" height="15" fill="rgb(248,177,22)" fg:x="15" fg:w="4558"/><text x="0.5769%" y="527.50">ms.exe`ms::run(alloc::vec::Vec</text></g><g><title>ms.exe`ms_runtime::virtual_machine::VirtualMachine::call(ref$&lt;str$&gt;, ref$&lt;str$&gt;, alloc::vec::Vec&lt;enum2$ (4,550 samples, 99.17%)</title><rect x="0.5013%" y="501" width="99.1718%" height="15" fill="rgb(215,211,37)" fg:x="23" fg:w="4550"/><text x="0.7513%" y="511.50">ms.exe`ms_runtime::virtual_machine::VirtualMachine::call(ref$&lt;str$&gt;, ref$&lt;str$&gt;, alloc::vec::Vec&lt;enum2$</text></g><g><title>ms.exe`alloc::vec::Vec&lt;alloc::vec::Vec&lt;enum2$&lt;ms_runtime::value::Value&gt;,alloc::alloc::Global&gt;,alloc::alloc::Global&gt;::pop (4,550 samples, 99.17%)</title><rect x="0.5013%" y="485" width="99.1718%" height="15" fill="rgb(241,128,51)" fg:x="23" fg:w="4550"/><text x="0.7513%" y="495.50">ms.exe`alloc::vec::Vec&lt;alloc::vec::Vec&lt;enum2$&lt;ms_runtime::value::Value&gt;,alloc::alloc::Global&gt;,alloc::alloc::Global&gt;::pop</text></g><g><title>ms.exe`ms_runtime::virtual_machine::VirtualMachine::execute(alloc::vec::Vec&lt;enum2$ (4,550 samples, 99.17%)</title><rect x="0.5013%" y="469" width="99.1718%" height="15" fill="rgb(227,165,31)" fg:x="23" fg:w="4550"/><text x="0.7513%" y="479.50">ms.exe`ms_runtime::virtual_machine::VirtualMachine::execute(alloc::vec::Vec&lt;enum2$</text></g><g><title>ms.exe`ms_runtime::virtual_machine::VirtualMachine::execute(alloc::vec::Vec&lt;enum2$ (4,530 samples, 98.74%)</title><rect x="0.9372%" y="453" width="98.7358%" height="15" fill="rgb(228,167,24)" fg:x="43" fg:w="4530"/><text x="1.1872%" y="463.50">ms.exe`ms_runtime::virtual_machine::VirtualMachine::execute(alloc::vec::Vec&lt;enum2$</text></g><g><title>ms.exe`ms_runtime::virtual_machine::impl$0::execute::get_local (235 samples, 5.12%)</title><rect x="94.5510%" y="437" width="5.1221%" height="15" fill="rgb(228,143,12)" fg:x="4338" fg:w="235"/><text x="94.8010%" y="447.50">ms.exe..</text></g><g><title>ms.exe`ms_runtime::value::impl$2::clone(enum2$ (163 samples, 3.55%)</title><rect x="96.1203%" y="421" width="3.5527%" height="15" fill="rgb(249,149,8)" fg:x="4410" fg:w="163"/><text x="96.3703%" y="431.50">ms.e..</text></g><g><title>`0x7FFE5217AA74 (1 samples, 0.02%)</title><rect x="99.6731%" y="709" width="0.0218%" height="15" fill="rgb(243,35,44)" fg:x="4573" fg:w="1"/><text x="99.9231%" y="719.50"></text></g><g><title>`0x7FFE5215EF7E (1 samples, 0.02%)</title><rect x="99.6731%" y="693" width="0.0218%" height="15" fill="rgb(246,89,9)" fg:x="4573" fg:w="1"/><text x="99.9231%" y="703.50"></text></g><g><title>`0x7FFE52150A64 (1 samples, 0.02%)</title><rect x="99.6731%" y="677" width="0.0218%" height="15" fill="rgb(233,213,13)" fg:x="4573" fg:w="1"/><text x="99.9231%" y="687.50"></text></g><g><title>`0x7FFE5218D936 (1 samples, 0.02%)</title><rect x="99.6949%" y="693" width="0.0218%" height="15" fill="rgb(233,141,41)" fg:x="4574" fg:w="1"/><text x="99.9449%" y="703.50"></text></g><g><title>`0x7FFE52160533 (1 samples, 0.02%)</title><rect x="99.6949%" y="677" width="0.0218%" height="15" fill="rgb(239,167,4)" fg:x="4574" fg:w="1"/><text x="99.9449%" y="687.50"></text></g><g><title>`0x7FFE52160F05 (1 samples, 0.02%)</title><rect x="99.6949%" y="661" width="0.0218%" height="15" fill="rgb(209,217,16)" fg:x="4574" fg:w="1"/><text x="99.9449%" y="671.50"></text></g><g><title>`0x7FFE5215742E (1 samples, 0.02%)</title><rect x="99.6949%" y="645" width="0.0218%" height="15" fill="rgb(219,88,35)" fg:x="4574" fg:w="1"/><text x="99.9449%" y="655.50"></text></g><g><title>`0x7FFE5218DB45 (1 samples, 0.02%)</title><rect x="99.7167%" y="693" width="0.0218%" height="15" fill="rgb(220,193,23)" fg:x="4575" fg:w="1"/><text x="99.9667%" y="703.50"></text></g><g><title>`0x7FFE5210860A (1 samples, 0.02%)</title><rect x="99.7167%" y="677" width="0.0218%" height="15" fill="rgb(230,90,52)" fg:x="4575" fg:w="1"/><text x="99.9667%" y="687.50"></text></g><g><title>`0x7FFE52108CCF (1 samples, 0.02%)</title><rect x="99.7167%" y="661" width="0.0218%" height="15" fill="rgb(252,106,19)" fg:x="4575" fg:w="1"/><text x="99.9667%" y="671.50"></text></g><g><title>`0x7FFE52108D74 (1 samples, 0.02%)</title><rect x="99.7167%" y="645" width="0.0218%" height="15" fill="rgb(206,74,20)" fg:x="4575" fg:w="1"/><text x="99.9667%" y="655.50"></text></g><g><title>`0x7FFE520CECA8 (1 samples, 0.02%)</title><rect x="99.7167%" y="629" width="0.0218%" height="15" fill="rgb(230,138,44)" fg:x="4575" fg:w="1"/><text x="99.9667%" y="639.50"></text></g><g><title>`0x7FFE52108851 (1 samples, 0.02%)</title><rect x="99.7167%" y="613" width="0.0218%" height="15" fill="rgb(235,182,43)" fg:x="4575" fg:w="1"/><text x="99.9667%" y="623.50"></text></g><g><title>`0x7FFE5210893F (1 samples, 0.02%)</title><rect x="99.7167%" y="597" width="0.0218%" height="15" fill="rgb(242,16,51)" fg:x="4575" fg:w="1"/><text x="99.9667%" y="607.50"></text></g><g><title>`0x7FFE520ECCAA (1 samples, 0.02%)</title><rect x="99.7167%" y="581" width="0.0218%" height="15" fill="rgb(248,9,4)" fg:x="4575" fg:w="1"/><text x="99.9667%" y="591.50"></text></g><g><title>`0x7FFE520EDFA1 (1 samples, 0.02%)</title><rect x="99.7167%" y="565" width="0.0218%" height="15" fill="rgb(210,31,22)" fg:x="4575" fg:w="1"/><text x="99.9667%" y="575.50"></text></g><g><title>`0x7FFE5211FAEE (1 samples, 0.02%)</title><rect x="99.7167%" y="549" width="0.0218%" height="15" fill="rgb(239,54,39)" fg:x="4575" fg:w="1"/><text x="99.9667%" y="559.50"></text></g><g><title>`0x7FFE520E7D16 (1 samples, 0.02%)</title><rect x="99.7167%" y="533" width="0.0218%" height="15" fill="rgb(230,99,41)" fg:x="4575" fg:w="1"/><text x="99.9667%" y="543.50"></text></g><g><title>`0x7FFE520DC744 (1 samples, 0.02%)</title><rect x="99.7384%" y="597" width="0.0218%" height="15" fill="rgb(253,106,12)" fg:x="4576" fg:w="1"/><text x="99.9884%" y="607.50"></text></g><g><title>`0x7FFE520DC5BA (1 samples, 0.02%)</title><rect x="99.7384%" y="581" width="0.0218%" height="15" fill="rgb(213,46,41)" fg:x="4576" fg:w="1"/><text x="99.9884%" y="591.50"></text></g><g><title>`0x7FFE520DC9BC (1 samples, 0.02%)</title><rect x="99.7384%" y="565" width="0.0218%" height="15" fill="rgb(215,133,35)" fg:x="4576" fg:w="1"/><text x="99.9884%" y="575.50"></text></g><g><title>`0x7FFE521508A4 (1 samples, 0.02%)</title><rect x="99.7384%" y="549" width="0.0218%" height="15" fill="rgb(213,28,5)" fg:x="4576" fg:w="1"/><text x="99.9884%" y="559.50"></text></g><g><title>`0x7FFE520D4B66 (1 samples, 0.02%)</title><rect x="99.7602%" y="581" width="0.0218%" height="15" fill="rgb(215,77,49)" fg:x="4577" fg:w="1"/><text x="100.0102%" y="591.50"></text></g><g><title>`0x7FFE520D4153 (1 samples, 0.02%)</title><rect x="99.7820%" y="565" width="0.0218%" height="15" fill="rgb(248,100,22)" fg:x="4578" fg:w="1"/><text x="100.0320%" y="575.50"></text></g><g><title>`0x7FFE520D8DA6 (4 samples, 0.09%)</title><rect x="99.7384%" y="645" width="0.0872%" height="15" fill="rgb(208,67,9)" fg:x="4576" fg:w="4"/><text x="99.9884%" y="655.50"></text></g><g><title>`0x7FFE520DE299 (4 samples, 0.09%)</title><rect x="99.7384%" y="629" width="0.0872%" height="15" fill="rgb(219,133,21)" fg:x="4576" fg:w="4"/><text x="99.9884%" y="639.50"></text></g><g><title>`0x7FFE520DD319 (4 samples, 0.09%)</title><rect x="99.7384%" y="613" width="0.0872%" height="15" fill="rgb(246,46,29)" fg:x="4576" fg:w="4"/><text x="99.9884%" y="623.50"></text></g><g><title>`0x7FFE520DC8E8 (3 samples, 0.07%)</title><rect x="99.7602%" y="597" width="0.0654%" height="15" fill="rgb(246,185,52)" fg:x="4577" fg:w="3"/><text x="100.0102%" y="607.50"></text></g><g><title>`0x7FFE520D4C64 (2 samples, 0.04%)</title><rect x="99.7820%" y="581" width="0.0436%" height="15" fill="rgb(252,136,11)" fg:x="4578" fg:w="2"/><text x="100.0320%" y="591.50"></text></g><g><title>`0x7FFE520D41A8 (1 samples, 0.02%)</title><rect x="99.8038%" y="565" width="0.0218%" height="15" fill="rgb(219,138,53)" fg:x="4579" fg:w="1"/><text x="100.0538%" y="575.50"></text></g><g><title>`0x7FFE4F43208D (1 samples, 0.02%)</title><rect x="99.8256%" y="549" width="0.0218%" height="15" fill="rgb(211,51,23)" fg:x="4580" fg:w="1"/><text x="100.0756%" y="559.50"></text></g><g><title>`0x7FFE4F432C29 (1 samples, 0.02%)</title><rect x="99.8256%" y="533" width="0.0218%" height="15" fill="rgb(247,221,28)" fg:x="4580" fg:w="1"/><text x="100.0756%" y="543.50"></text></g><g><title>`0x7FFE4F466F28 (1 samples, 0.02%)</title><rect x="99.8256%" y="517" width="0.0218%" height="15" fill="rgb(251,222,45)" fg:x="4580" fg:w="1"/><text x="100.0756%" y="527.50"></text></g><g><title>`0x7FFE520E19D0 (1 samples, 0.02%)</title><rect x="99.8256%" y="501" width="0.0218%" height="15" fill="rgb(217,162,53)" fg:x="4580" fg:w="1"/><text x="100.0756%" y="511.50"></text></g><g><title>`0x7FFE520E26BA (1 samples, 0.02%)</title><rect x="99.8256%" y="485" width="0.0218%" height="15" fill="rgb(229,93,14)" fg:x="4580" fg:w="1"/><text x="100.0756%" y="495.50"></text></g><g><title>`0x7FFE520E2547 (1 samples, 0.02%)</title><rect x="99.8256%" y="469" width="0.0218%" height="15" fill="rgb(209,67,49)" fg:x="4580" fg:w="1"/><text x="100.0756%" y="479.50"></text></g><g><title>`0x7FFE52153DF4 (1 samples, 0.02%)</title><rect x="99.8256%" y="453" width="0.0218%" height="15" fill="rgb(213,87,29)" fg:x="4580" fg:w="1"/><text x="100.0756%" y="463.50"></text></g><g><title>`0x7FFE5218E973 (6 samples, 0.13%)</title><rect x="99.7384%" y="693" width="0.1308%" height="15" fill="rgb(205,151,52)" fg:x="4576" fg:w="6"/><text x="99.9884%" y="703.50"></text></g><g><title>`0x7FFE520DA74A (6 samples, 0.13%)</title><rect x="99.7384%" y="677" width="0.1308%" height="15" fill="rgb(253,215,39)" fg:x="4576" fg:w="6"/><text x="99.9884%" y="687.50"></text></g><g><title>`0x7FFE520C90CC (6 samples, 0.13%)</title><rect x="99.7384%" y="661" width="0.1308%" height="15" fill="rgb(221,220,41)" fg:x="4576" fg:w="6"/><text x="99.9884%" y="671.50"></text></g><g><title>`0x7FFE520D8E30 (2 samples, 0.04%)</title><rect x="99.8256%" y="645" width="0.0436%" height="15" fill="rgb(218,133,21)" fg:x="4580" fg:w="2"/><text x="100.0756%" y="655.50"></text></g><g><title>`0x7FFE520DDB1D (2 samples, 0.04%)</title><rect x="99.8256%" y="629" width="0.0436%" height="15" fill="rgb(221,193,43)" fg:x="4580" fg:w="2"/><text x="100.0756%" y="639.50"></text></g><g><title>`0x7FFE5211D460 (2 samples, 0.04%)</title><rect x="99.8256%" y="613" width="0.0436%" height="15" fill="rgb(240,128,52)" fg:x="4580" fg:w="2"/><text x="100.0756%" y="623.50"></text></g><g><title>`0x7FFE5211D3EE (2 samples, 0.04%)</title><rect x="99.8256%" y="597" width="0.0436%" height="15" fill="rgb(253,114,12)" fg:x="4580" fg:w="2"/><text x="100.0756%" y="607.50"></text></g><g><title>`0x7FFE5211D63D (2 samples, 0.04%)</title><rect x="99.8256%" y="581" width="0.0436%" height="15" fill="rgb(215,223,47)" fg:x="4580" fg:w="2"/><text x="100.0756%" y="591.50"></text></g><g><title>`0x7FFE520D8B8F (2 samples, 0.04%)</title><rect x="99.8256%" y="565" width="0.0436%" height="15" fill="rgb(248,225,23)" fg:x="4580" fg:w="2"/><text x="100.0756%" y="575.50"></text></g><g><title>`0x7FFE4F4320C7 (1 samples, 0.02%)</title><rect x="99.8474%" y="549" width="0.0218%" height="15" fill="rgb(250,108,0)" fg:x="4581" fg:w="1"/><text x="100.0974%" y="559.50"></text></g><g><title>`0x7FFE4F466F28 (1 samples, 0.02%)</title><rect x="99.8474%" y="533" width="0.0218%" height="15" fill="rgb(228,208,7)" fg:x="4581" fg:w="1"/><text x="100.0974%" y="543.50"></text></g><g><title>`0x7FFE520E19D0 (1 samples, 0.02%)</title><rect x="99.8474%" y="517" width="0.0218%" height="15" fill="rgb(244,45,10)" fg:x="4581" fg:w="1"/><text x="100.0974%" y="527.50"></text></g><g><title>`0x7FFE520E26BA (1 samples, 0.02%)</title><rect x="99.8474%" y="501" width="0.0218%" height="15" fill="rgb(207,125,25)" fg:x="4581" fg:w="1"/><text x="100.0974%" y="511.50"></text></g><g><title>`0x7FFE520E2547 (1 samples, 0.02%)</title><rect x="99.8474%" y="485" width="0.0218%" height="15" fill="rgb(210,195,18)" fg:x="4581" fg:w="1"/><text x="100.0974%" y="495.50"></text></g><g><title>`0x7FFE52153DF4 (1 samples, 0.02%)</title><rect x="99.8474%" y="469" width="0.0218%" height="15" fill="rgb(249,80,12)" fg:x="4581" fg:w="1"/><text x="100.0974%" y="479.50"></text></g><g><title>`0x7FFE5218EA30 (1 samples, 0.02%)</title><rect x="99.8692%" y="693" width="0.0218%" height="15" fill="rgb(221,65,9)" fg:x="4582" fg:w="1"/><text x="100.1192%" y="703.50"></text></g><g><title>`0x7FFE520B9C0E (1 samples, 0.02%)</title><rect x="99.8692%" y="677" width="0.0218%" height="15" fill="rgb(235,49,36)" fg:x="4582" fg:w="1"/><text x="100.1192%" y="687.50"></text></g><g><title>`0x7FFE521505E4 (1 samples, 0.02%)</title><rect x="99.8692%" y="661" width="0.0218%" height="15" fill="rgb(225,32,20)" fg:x="4582" fg:w="1"/><text x="100.1192%" y="671.50"></text></g><g><title>`0x7FFE5218ECA3 (1 samples, 0.02%)</title><rect x="99.8910%" y="693" width="0.0218%" height="15" fill="rgb(215,141,46)" fg:x="4583" fg:w="1"/><text x="100.1410%" y="703.50"></text></g><g><title>`0x7FFE520D4BAB (1 samples, 0.02%)</title><rect x="99.8910%" y="677" width="0.0218%" height="15" fill="rgb(250,160,47)" fg:x="4583" fg:w="1"/><text x="100.1410%" y="687.50"></text></g><g><title>`0x7FFE520D4DF6 (1 samples, 0.02%)</title><rect x="99.8910%" y="661" width="0.0218%" height="15" fill="rgb(216,222,40)" fg:x="4583" fg:w="1"/><text x="100.1410%" y="671.50"></text></g><g><title>`0x7FFE520D5DB4 (1 samples, 0.02%)</title><rect x="99.8910%" y="645" width="0.0218%" height="15" fill="rgb(234,217,39)" fg:x="4583" fg:w="1"/><text x="100.1410%" y="655.50"></text></g><g><title>`0x7FFE520DD319 (1 samples, 0.02%)</title><rect x="99.8910%" y="629" width="0.0218%" height="15" fill="rgb(207,178,40)" fg:x="4583" fg:w="1"/><text x="100.1410%" y="639.50"></text></g><g><title>`0x7FFE520DC889 (1 samples, 0.02%)</title><rect x="99.8910%" y="613" width="0.0218%" height="15" fill="rgb(221,136,13)" fg:x="4583" fg:w="1"/><text x="100.1410%" y="623.50"></text></g><g><title>`0x7FFE520DB436 (1 samples, 0.02%)</title><rect x="99.8910%" y="597" width="0.0218%" height="15" fill="rgb(249,199,10)" fg:x="4583" fg:w="1"/><text x="100.1410%" y="607.50"></text></g><g><title>`0x7FFE520DB65C (1 samples, 0.02%)</title><rect x="99.8910%" y="581" width="0.0218%" height="15" fill="rgb(249,222,13)" fg:x="4583" fg:w="1"/><text x="100.1410%" y="591.50"></text></g><g><title>`0x7FFE520DD186 (1 samples, 0.02%)</title><rect x="99.8910%" y="565" width="0.0218%" height="15" fill="rgb(244,185,38)" fg:x="4583" fg:w="1"/><text x="100.1410%" y="575.50"></text></g><g><title>`0x7FFE521509C4 (1 samples, 0.02%)</title><rect x="99.8910%" y="549" width="0.0218%" height="15" fill="rgb(236,202,9)" fg:x="4583" fg:w="1"/><text x="100.1410%" y="559.50"></text></g><g><title>`0x7FFE520C0F1E (1 samples, 0.02%)</title><rect x="99.9128%" y="645" width="0.0218%" height="15" fill="rgb(250,229,37)" fg:x="4584" fg:w="1"/><text x="100.1628%" y="655.50"></text></g><g><title>`0x7FFE520DDED8 (1 samples, 0.02%)</title><rect x="99.9128%" y="629" width="0.0218%" height="15" fill="rgb(206,174,23)" fg:x="4584" fg:w="1"/><text x="100.1628%" y="639.50"></text></g><g><title>`0x7FFE5212AF1A (1 samples, 0.02%)</title><rect x="99.9128%" y="613" width="0.0218%" height="15" fill="rgb(211,33,43)" fg:x="4584" fg:w="1"/><text x="100.1628%" y="623.50"></text></g><g><title>`0x7FFE520E1B98 (1 samples, 0.02%)</title><rect x="99.9128%" y="597" width="0.0218%" height="15" fill="rgb(245,58,50)" fg:x="4584" fg:w="1"/><text x="100.1628%" y="607.50"></text></g><g><title>`0x7FFE520E1E1F (1 samples, 0.02%)</title><rect x="99.9128%" y="581" width="0.0218%" height="15" fill="rgb(244,68,36)" fg:x="4584" fg:w="1"/><text x="100.1628%" y="591.50"></text></g><g><title>`0x7FFE5211A3C3 (1 samples, 0.02%)</title><rect x="99.9128%" y="565" width="0.0218%" height="15" fill="rgb(232,229,15)" fg:x="4584" fg:w="1"/><text x="100.1628%" y="575.50"></text></g><g><title>`0x7FFE5211AB60 (1 samples, 0.02%)</title><rect x="99.9128%" y="549" width="0.0218%" height="15" fill="rgb(254,30,23)" fg:x="4584" fg:w="1"/><text x="100.1628%" y="559.50"></text></g><g><title>`0x7FFE521505E4 (1 samples, 0.02%)</title><rect x="99.9128%" y="533" width="0.0218%" height="15" fill="rgb(235,160,14)" fg:x="4584" fg:w="1"/><text x="100.1628%" y="543.50"></text></g><g><title>`0x7FFE5218ECAB (2 samples, 0.04%)</title><rect x="99.9128%" y="693" width="0.0436%" height="15" fill="rgb(212,155,44)" fg:x="4584" fg:w="2"/><text x="100.1628%" y="703.50"></text></g><g><title>`0x7FFE520DA590 (2 samples, 0.04%)</title><rect x="99.9128%" y="677" width="0.0436%" height="15" fill="rgb(226,2,50)" fg:x="4584" fg:w="2"/><text x="100.1628%" y="687.50"></text></g><g><title>`0x7FFE520C13B0 (2 samples, 0.04%)</title><rect x="99.9128%" y="661" width="0.0436%" height="15" fill="rgb(234,177,6)" fg:x="4584" fg:w="2"/><text x="100.1628%" y="671.50"></text></g><g><title>`0x7FFE520C0FE8 (1 samples, 0.02%)</title><rect x="99.9346%" y="645" width="0.0218%" height="15" fill="rgb(217,24,9)" fg:x="4585" fg:w="1"/><text x="100.1846%" y="655.50"></text></g><g><title>`0x7FFE520C0B2F (1 samples, 0.02%)</title><rect x="99.9346%" y="629" width="0.0218%" height="15" fill="rgb(220,13,46)" fg:x="4585" fg:w="1"/><text x="100.1846%" y="639.50"></text></g><g><title>`0x7FFE520DC889 (1 samples, 0.02%)</title><rect x="99.9346%" y="613" width="0.0218%" height="15" fill="rgb(239,221,27)" fg:x="4585" fg:w="1"/><text x="100.1846%" y="623.50"></text></g><g><title>`0x7FFE520DB436 (1 samples, 0.02%)</title><rect x="99.9346%" y="597" width="0.0218%" height="15" fill="rgb(222,198,25)" fg:x="4585" fg:w="1"/><text x="100.1846%" y="607.50"></text></g><g><title>`0x7FFE520DB611 (1 samples, 0.02%)</title><rect x="99.9346%" y="581" width="0.0218%" height="15" fill="rgb(211,99,13)" fg:x="4585" fg:w="1"/><text x="100.1846%" y="591.50"></text></g><g><title>`0x7FFE520DB751 (1 samples, 0.02%)</title><rect x="99.9346%" y="565" width="0.0218%" height="15" fill="rgb(232,111,31)" fg:x="4585" fg:w="1"/><text x="100.1846%" y="575.50"></text></g><g><title>`0x7FFE520DB836 (1 samples, 0.02%)</title><rect x="99.9346%" y="549" width="0.0218%" height="15" fill="rgb(245,82,37)" fg:x="4585" fg:w="1"/><text x="100.1846%" y="559.50"></text></g><g><title>`0x7FFE5211D3EE (1 samples, 0.02%)</title><rect x="99.9564%" y="661" width="0.0218%" height="15" fill="rgb(227,149,46)" fg:x="4586" fg:w="1"/><text x="100.2064%" y="671.50"></text></g><g><title>`0x7FFE5211D63D (1 samples, 0.02%)</title><rect x="99.9564%" y="645" width="0.0218%" height="15" fill="rgb(218,36,50)" fg:x="4586" fg:w="1"/><text x="100.2064%" y="655.50"></text></g><g><title>`0x7FFE520D8B8F (1 samples, 0.02%)</title><rect x="99.9564%" y="629" width="0.0218%" height="15" fill="rgb(226,80,48)" fg:x="4586" fg:w="1"/><text x="100.2064%" y="639.50"></text></g><g><title>`0x7FFE4F980B2A (1 samples, 0.02%)</title><rect x="99.9564%" y="613" width="0.0218%" height="15" fill="rgb(238,224,15)" fg:x="4586" fg:w="1"/><text x="100.2064%" y="623.50"></text></g><g><title>`0x7FFE4F971540 (1 samples, 0.02%)</title><rect x="99.9564%" y="597" width="0.0218%" height="15" fill="rgb(241,136,10)" fg:x="4586" fg:w="1"/><text x="100.2064%" y="607.50"></text></g><g><title>`0x7FFE4F98A53D (1 samples, 0.02%)</title><rect x="99.9564%" y="581" width="0.0218%" height="15" fill="rgb(208,32,45)" fg:x="4586" fg:w="1"/><text x="100.2064%" y="591.50"></text></g><g><title>`0x7FFE4F41FA59 (1 samples, 0.02%)</title><rect x="99.9564%" y="565" width="0.0218%" height="15" fill="rgb(207,135,9)" fg:x="4586" fg:w="1"/><text x="100.2064%" y="575.50"></text></g><g><title>`0x7FFE4F41FBA8 (1 samples, 0.02%)</title><rect x="99.9564%" y="549" width="0.0218%" height="15" fill="rgb(206,86,44)" fg:x="4586" fg:w="1"/><text x="100.2064%" y="559.50"></text></g><g><title>`0x7FFE4F420AD0 (1 samples, 0.02%)</title><rect x="99.9564%" y="533" width="0.0218%" height="15" fill="rgb(245,177,15)" fg:x="4586" fg:w="1"/><text x="100.2064%" y="543.50"></text></g><g><title>`0x7FFE4F420EB2 (1 samples, 0.02%)</title><rect x="99.9564%" y="517" width="0.0218%" height="15" fill="rgb(206,64,50)" fg:x="4586" fg:w="1"/><text x="100.2064%" y="527.50"></text></g><g><title>`0x7FFE52150664 (1 samples, 0.02%)</title><rect x="99.9564%" y="501" width="0.0218%" height="15" fill="rgb(234,36,40)" fg:x="4586" fg:w="1"/><text x="100.2064%" y="511.50"></text></g><g><title>all (4,588 samples, 100%)</title><rect x="0.0000%" y="757" width="100.0000%" height="15" fill="rgb(213,64,8)" fg:x="0" fg:w="4588"/><text x="0.2500%" y="767.50"></text></g><g><title>`0x7FFE5212440E (15 samples, 0.33%)</title><rect x="99.6731%" y="741" width="0.3269%" height="15" fill="rgb(210,75,36)" fg:x="4573" fg:w="15"/><text x="99.9231%" y="751.50"></text></g><g><title>`0x7FFE521244E3 (15 samples, 0.33%)</title><rect x="99.6731%" y="725" width="0.3269%" height="15" fill="rgb(229,88,21)" fg:x="4573" fg:w="15"/><text x="99.9231%" y="735.50"></text></g><g><title>`0x7FFE5217AAD6 (14 samples, 0.31%)</title><rect x="99.6949%" y="709" width="0.3051%" height="15" fill="rgb(252,204,47)" fg:x="4574" fg:w="14"/><text x="99.9449%" y="719.50"></text></g><g><title>`0x7FFE5218EE29 (2 samples, 0.04%)</title><rect x="99.9564%" y="693" width="0.0436%" height="15" fill="rgb(208,77,27)" fg:x="4586" fg:w="2"/><text x="100.2064%" y="703.50"></text></g><g><title>`0x7FFE5211D460 (2 samples, 0.04%)</title><rect x="99.9564%" y="677" width="0.0436%" height="15" fill="rgb(221,76,26)" fg:x="4586" fg:w="2"/><text x="100.2064%" y="687.50"></text></g><g><title>`0x7FFE5211D460 (1 samples, 0.02%)</title><rect x="99.9782%" y="661" width="0.0218%" height="15" fill="rgb(225,139,18)" fg:x="4587" fg:w="1"/><text x="100.2282%" y="671.50"></text></g><g><title>`0x7FFE5211D3EE (1 samples, 0.02%)</title><rect x="99.9782%" y="645" width="0.0218%" height="15" fill="rgb(230,137,11)" fg:x="4587" fg:w="1"/><text x="100.2282%" y="655.50"></text></g><g><title>`0x7FFE5211D63D (1 samples, 0.02%)</title><rect x="99.9782%" y="629" width="0.0218%" height="15" fill="rgb(212,28,1)" fg:x="4587" fg:w="1"/><text x="100.2282%" y="639.50"></text></g><g><title>`0x7FFE520D8B8F (1 samples, 0.02%)</title><rect x="99.9782%" y="613" width="0.0218%" height="15" fill="rgb(248,164,17)" fg:x="4587" fg:w="1"/><text x="100.2282%" y="623.50"></text></g><g><title>`0x7FFE4FBC76B3 (1 samples, 0.02%)</title><rect x="99.9782%" y="597" width="0.0218%" height="15" fill="rgb(222,171,42)" fg:x="4587" fg:w="1"/><text x="100.2282%" y="607.50"></text></g><g><title>`0x7FFE4FBC7FCA (1 samples, 0.02%)</title><rect x="99.9782%" y="581" width="0.0218%" height="15" fill="rgb(243,84,45)" fg:x="4587" fg:w="1"/><text x="100.2282%" y="591.50"></text></g><g><title>`0x7FFE4FBD7889 (1 samples, 0.02%)</title><rect x="99.9782%" y="565" width="0.0218%" height="15" fill="rgb(252,49,23)" fg:x="4587" fg:w="1"/><text x="100.2282%" y="575.50"></text></g><g><title>`0x7FFE4FBD78D8 (1 samples, 0.02%)</title><rect x="99.9782%" y="549" width="0.0218%" height="15" fill="rgb(215,19,7)" fg:x="4587" fg:w="1"/><text x="100.2282%" y="559.50"></text></g><g><title>`0x7FFE4FBB6970 (1 samples, 0.02%)</title><rect x="99.9782%" y="533" width="0.0218%" height="15" fill="rgb(238,81,41)" fg:x="4587" fg:w="1"/><text x="100.2282%" y="543.50"></text></g><g><title>`0x7FFE4FBB88DC (1 samples, 0.02%)</title><rect x="99.9782%" y="517" width="0.0218%" height="15" fill="rgb(210,199,37)" fg:x="4587" fg:w="1"/><text x="100.2282%" y="527.50"></text></g><g><title>`0x7FFE4F42AB35 (1 samples, 0.02%)</title><rect x="99.9782%" y="501" width="0.0218%" height="15" fill="rgb(244,192,49)" fg:x="4587" fg:w="1"/><text x="100.2282%" y="511.50"></text></g><g><title>`0x7FFE4F42AF03 (1 samples, 0.02%)</title><rect x="99.9782%" y="485" width="0.0218%" height="15" fill="rgb(226,211,11)" fg:x="4587" fg:w="1"/><text x="100.2282%" y="495.50"></text></g></svg></svg>

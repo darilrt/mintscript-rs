@@ -1,6 +1,7 @@
 pub(crate) struct ByteReader<'a> {
     source: &'a Vec<u8>,
     position: usize,
+    saved_position: usize,
 }
 
 impl<'a> ByteReader<'a> {
@@ -8,7 +9,16 @@ impl<'a> ByteReader<'a> {
         ByteReader {
             source: source,
             position: 0,
+            saved_position: 0,
         }
+    }
+
+    pub fn save_position(&mut self) {
+        self.saved_position = self.position;
+    }
+
+    pub fn restore_position(&mut self) {
+        self.position = self.saved_position;
     }
 
     pub fn read_byte(&mut self) -> Option<u8> {

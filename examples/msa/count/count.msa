@@ -1,0 +1,32 @@
+
+(mod.load std.mod
+    (fn.get print)
+)
+
+(mod main
+    (fn main
+        (local.reserve 1)
+        
+        (i32.const 1000000)
+        (local.set 0) ; i = 10
+
+        (str.const "Start from:")
+        (local.get 0)
+        (call std.mod print 2) ; print("Start from:", i)
+        
+        (loop
+            (local.get 0)
+            (i32.const 0)
+            (cmp.eq)
+            (then (break)) ; if i == 0 then break
+
+            (local.get 0)
+            (op.dec)
+            (local.set 0) ; i = i - 1
+        )
+        
+        (str.const "End at:")
+        (local.get 0)
+        (call std.mod print 2) ; print("End at:", i)
+    )
+)

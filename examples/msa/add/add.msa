@@ -1,0 +1,8 @@
+
+(mod main
+    (fn add
+        (local.get 0)
+        (local.get 1)
+        (op.add)
+    )
+)

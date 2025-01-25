@@ -7,17 +7,17 @@ use std::{
 use crate::{
     instruction::{Code, Instruction},
     module::Module,
-    DyModule, Object, Value,
+    DyModule, Function, Object, Value,
 };
 
 pub struct VirtualMachine {
-    stack: Vec<Value>,
-    modules: HashMap<String, Module>,
-    dymodules: HashMap<String, DyModule>,
-    local_vars: Vec<Vec<Value>>,
-    call_break: bool,
-    call_continue: bool,
-    call_return: bool,
+    pub stack: Vec<Value>,
+    pub modules: HashMap<String, Module>,
+    pub dymodules: HashMap<String, DyModule>,
+    pub local_vars: Vec<Vec<Value>>,
+    pub call_break: bool,
+    pub call_continue: bool,
+    pub call_return: bool,
 }
 
 impl<'a> VirtualMachine {
@@ -55,7 +55,6 @@ impl<'a> VirtualMachine {
                     patch: _,
                 } => {}
                 Instruction::Dump => {
-                    // Show the stack and locals
                     println!("Stack: {:?}", self.stack);
                     println!("Locals: {:?}", self.local_vars);
                 }
@@ -63,7 +62,7 @@ impl<'a> VirtualMachine {
                     println!("Hi!");
                 }
                 Instruction::Fn { name: _, code: _ } => {
-                    panic!("Function call not allowed here");
+                    panic!("Function declaration not allowed here");
                 }
                 Instruction::Call {
                     module,
@@ -75,6 +74,10 @@ impl<'a> VirtualMachine {
                         .split_off(self.stack.len() - *param_count as usize);
 
                     self.call(module, function, args);
+
+                    self.call_return = false;
+                    self.call_continue = false;
+                    self.call_break = false;
                 }
                 Instruction::PushConstString { value } => {
                     self.stack.push(Value::String(value.clone()));
@@ -89,12 +92,8 @@ impl<'a> VirtualMachine {
                     self.stack.push(Value::Boolean(*value));
                 }
                 Instruction::GetLocal { index } => {
-                    if let Some(value) = self.local_vars.last() {
-                        if let Some(value) = value.get(*index as usize) {
-                            self.stack.push(value.clone());
-                        } else {
-                            panic!("Local variable not found");
-                        }
+                    if let Some(locals) = self.local_vars.last() {
+                        self.stack.push(locals[*index as usize].clone());
                     } else {
                         panic!("Local variable not found");
                     }
@@ -102,7 +101,7 @@ impl<'a> VirtualMachine {
                 Instruction::SetLocal { index } => {
                     if let Some(value) = self.stack.pop() {
                         if let Some(locals) = self.local_vars.last_mut() {
-                            locals[*index as usize] = value.clone();
+                            locals[*index as usize] = value;
                         } else {
                             panic!("Local variable not found");
                         }
@@ -159,7 +158,7 @@ impl<'a> VirtualMachine {
                         match object {
                             Object::Values(fields) => {
                                 if let Some(_) = fields.get(*index as usize) {
-                                    fields[*index as usize] = value.clone();
+                                    fields[*index as usize] = value;
                                 } else {
                                     panic!("Field not found");
                                 }
@@ -173,10 +172,7 @@ impl<'a> VirtualMachine {
                     }
                 }
                 Instruction::Pop => {
-                    if let Some(_) = self.stack.pop() {
-                    } else {
-                        panic!("No elements in the stack");
-                    }
+                    self.stack.pop();
                 }
                 Instruction::Dup => {
                     if let Some(arg) = self.stack.last() {
@@ -218,10 +214,10 @@ impl<'a> VirtualMachine {
 
                     match (a, b) {
                         (Value::Integer(a), Value::Integer(b)) => {
-                            self.stack.push(Value::Integer(a - b));
+                            self.stack.push(Value::Integer(b - a));
                         }
                         (Value::Float(a), Value::Float(b)) => {
-                            self.stack.push(Value::Float(a - b));
+                            self.stack.push(Value::Float(b - a));
                         }
                         _ => {
                             panic!("Invalid types");
@@ -262,6 +258,40 @@ impl<'a> VirtualMachine {
                         }
                         (Value::Float(a), Value::Float(b)) => {
                             self.stack.push(Value::Float(a / b));
+                        }
+                        _ => {
+                            panic!("Invalid types");
+                        }
+                    }
+                }
+                Instruction::Inc => {
+                    let Some(a) = self.stack.pop() else {
+                        panic!("No elements in the stack");
+                    };
+
+                    match a {
+                        Value::Integer(a) => {
+                            self.stack.push(Value::Integer(a + 1));
+                        }
+                        Value::Float(a) => {
+                            self.stack.push(Value::Float(a + 1.0));
+                        }
+                        _ => {
+                            panic!("Invalid types");
+                        }
+                    }
+                }
+                Instruction::Dec => {
+                    let Some(a) = self.stack.pop() else {
+                        panic!("No elements in the stack");
+                    };
+
+                    match a {
+                        Value::Integer(a) => {
+                            self.stack.push(Value::Integer(a - 1));
+                        }
+                        Value::Float(a) => {
+                            self.stack.push(Value::Float(a - 1.0));
                         }
                         _ => {
                             panic!("Invalid types");
@@ -406,15 +436,15 @@ impl<'a> VirtualMachine {
                 Instruction::LoadModule { name: _, code: _ } => {
                     panic!("LoadModule call not allowed here");
                 }
-                Instruction::GetFunction { name: _ } => {
+                Instruction::GetFunction { name: _, alias: _ } => {
                     panic!("GetFunction call not allowed here");
                 }
                 Instruction::Return => {
                     self.call_return = true;
                     return;
                 }
-                Instruction::If {
-                    if_block,
+                Instruction::Then {
+                    then_block,
                     else_block,
                 } => {
                     let Some(value) = self.stack.pop() else {
@@ -423,12 +453,12 @@ impl<'a> VirtualMachine {
 
                     if let Value::Boolean(value) = value {
                         let result = if value {
-                            self.execute(if_block)
+                            self.execute(then_block)
                         } else {
                             self.execute(else_block)
                         };
 
-                        if self.call_return {
+                        if self.call_return || self.call_break || self.call_continue {
                             return result;
                         }
                     } else {
@@ -452,9 +482,11 @@ impl<'a> VirtualMachine {
                 },
                 Instruction::Break => {
                     self.call_break = true;
+                    return;
                 }
                 Instruction::Continue => {
                     self.call_continue = true;
+                    return;
                 }
             }
         }
@@ -495,8 +527,22 @@ impl<'a> VirtualMachine {
             if let Some(_) = module.get_function(name) {
                 return true;
             }
+        } else if let Some(dymodule) = self.dymodules.get(module) {
+            if let Some(_) = dymodule.fns.get(name) {
+                return true;
+            }
         }
 
         false
+    }
+
+    pub fn get_function(&self, module: &str, name: &str) -> Option<&Function> {
+        if let Some(module) = self.modules.get(module) {
+            if let Some(func) = module.get_function(name) {
+                return Some(func);
+            }
+        }
+
+        None
     }
 }

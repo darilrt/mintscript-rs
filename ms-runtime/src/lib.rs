@@ -69,7 +69,7 @@ pub fn load_modules(code: &Code) -> Result<(Vec<Module>, Vec<DyModule>), String>
 
                 for instruction in code.iter() {
                     match instruction {
-                        Instruction::GetFunction { name } => {
+                        Instruction::GetFunction { name, alias } => {
                             let symbol = name.clone();
                             let func: libloading::Symbol<'_, fn(Vec<Value>) -> Option<Value>> = unsafe {
                                 dymodule
@@ -77,7 +77,12 @@ pub fn load_modules(code: &Code) -> Result<(Vec<Module>, Vec<DyModule>), String>
                                     .get(symbol.as_bytes())
                                     .map_err(|e| e.to_string())?
                             };
-                            dymodule.fns.insert(name.clone(), Box::new(*func));
+
+                            if let Some(alias) = alias {
+                                dymodule.fns.insert(alias.clone(), Box::new(*func));
+                            } else {
+                                dymodule.fns.insert(name.clone(), Box::new(*func));
+                            }
                         }
                         _ => {
                             return Err("Invalid instruction type, expected (fn.get)".to_string());
